@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Noto Sans TC', 'PingFang TC', 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #3e3a36;
+  background: #f7f4eb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+}
+
+html {
+  background-color: #f7f4eb;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(124, 135, 112, 0.08) 1.5px, transparent 0)
+      0 0 / 18px 18px,
+    #f7f4eb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+@layer components {
+  .soft-card {
+    @apply rounded-[28px] border bg-white/90 shadow-soft;
+    border-color: #e2e7dc;
+  }
+
+  .label-chip {
+    @apply inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em];
+  }
+
+  .bottom-nav-item {
+    @apply flex flex-col items-center gap-1 text-[10px] font-medium text-muted transition-transform duration-150 active:scale-95;
+  }
+
+  .form-field {
+    @apply mt-1 w-full rounded-2xl bg-[#F7F4EB] px-3 py-2.5 text-sm font-bold text-ink outline-none ring-olive/30 focus:ring-2;
+  }
+
+  .section-info {
+    background-color: #eef8ff !important;
+    border-left: 4px solid #67c9f4 !important;
+  }
+
+  .section-action {
+    background-color: #effbea !important;
+    border-left: 4px solid #86b96a !important;
+  }
+
+  .section-money {
+    background-color: #fff8e7 !important;
+    border-left: 4px solid #edbd55 !important;
+  }
+
+  .section-park {
+    background-color: #f3efff !important;
+    border-left: 4px solid #aa91e8 !important;
+  }
+
+  .todo-composer {
+    @apply rounded-[28px] border-2 border-[#9ccd83] bg-[#f2faed] shadow-soft;
+  }
+
+  .todo-card {
+    @apply rounded-[28px] border border-[#dfe8d7] bg-white shadow-soft;
+  }
+
+  .todo-empty {
+    @apply rounded-[28px] border border-dashed border-[#b9d4aa] bg-[#f6fbf2] text-muted;
+  }
+
+  .schedule-item {
+    @apply rounded-[22px] border border-[#dce7ef] bg-[#f6fbff] shadow-sm;
+  }
+}
