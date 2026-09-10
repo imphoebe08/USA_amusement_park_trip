@@ -96,6 +96,8 @@ type TripData = {
     body: string
     meta: string
     accent: string
+    startDate?: string
+    endDate?: string
     attachment?: { url: string; name: string; type: string }
   }[]
   expenseEntries: {
@@ -159,6 +161,29 @@ const weatherDescription = (code: number | undefined) => {
   if ([95, 96, 99].includes(code)) return '雷雨'
   return '多雲'
 }
+
+const toDateInputValue = (dateText: string) => {
+  const match = dateText.match(/(\d{1,4})[/-](\d{1,2})[/-](\d{1,2})|^(\d{1,2})\/(\d{1,2})$/)
+  if (!match) return ''
+  const year = match[1] ? Number(match[1]) : new Date().getFullYear()
+  const month = Number(match[2] ?? match[4])
+  const day = Number(match[3] ?? match[5])
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+const formatDateLabel = (dateText: string) => {
+  if (!dateText) return '未設定日期'
+  const date = new Date(`${dateText}T00:00:00`)
+  return Number.isNaN(date.getTime()) ? dateText : new Intl.DateTimeFormat('zh-TW', { month: 'numeric', day: 'numeric' }).format(date)
+}
+
+const isPastFlight = (flight: FlightInfo) => {
+  const dateValue = toDateInputValue(flight.date)
+  if (!dateValue) return false
+  return new Date(`${dateValue}T23:59:59`).getTime() < Date.now()
+}
+
+type WeatherSummary = { location: string; description: string; temperature: string }
 
 const compressImageToWebp = async (file: File) => {
   const imageUrl = URL.createObjectURL(file)
@@ -496,7 +521,13 @@ const normalizeTripData = (value: Partial<TripData> | null | undefined): TripDat
     : localTripData.flightInfo,
   tripSettings: value?.tripSettings ?? localTripData.tripSettings,
   dayPlans: Array.isArray(value?.dayPlans) ? (value.dayPlans as DayPlan[]) : localTripData.dayPlans,
-  bookingCards: Array.isArray(value?.bookingCards) ? (value.bookingCards as TripData['bookingCards']) : localTripData.bookingCards,
+  bookingCards: Array.isArray(value?.bookingCards)
+    ? (value.bookingCards as TripData['bookingCards']).map((card) => ({
+        ...card,
+        startDate: card.startDate || '',
+        endDate: card.endDate || '',
+      }))
+    : localTripData.bookingCards,
   expenseEntries: Array.isArray(value?.expenseEntries) ? (value.expenseEntries as TripData['expenseEntries']) : localTripData.expenseEntries,
   planningTasks: Array.isArray(value?.planningTasks) ? (value.planningTasks as TripData['planningTasks']) : localTripData.planningTasks,
   members: Array.isArray(value?.members) ? (value.members as TripData['members']) : localTripData.members,
@@ -571,7 +602,7 @@ function App() {
   const [expandedFlightIndex, setExpandedFlightIndex] = useState<number | null>(0)
   const [preparationMode, setPreparationMode] = useState('待辦')
   const [preparationAssignee, setPreparationAssignee] = useState('全體')
-  const [weatherState, setWeatherState] = useState({ location: '讀取中', description: '讀取中', temperature: '--' })
+  const [weatherState, setWeatherState] = useState<WeatherSummary>({ location: '讀取中', description: '讀取中', temperature: '--' })
   const [previewAttachment, setPreviewAttachment] = useState<{ url: string; name: string; type: string } | null>(null)
   const [editingItem, setEditingItem] = useState<{ date: string; index: number | null } | null>(null)
   const [draftItem, setDraftItem] = useState<ScheduleItem>(emptyScheduleItem)
@@ -629,69 +660,38 @@ function App() {
   }, [selectedParkDayId, selectedParkId, tripData.parkSections])
 
   useEffect(() => {
-    const weatherPlan = tripData.dayPlans.find((day) => day.date === selectedDate) ?? tripData.dayPlans[0] ?? localTripData.dayPlans[0]
-    const firstItem = weatherPlan.items[0]
-    const scheduleText = firstItem
-      ? `${firstItem.title} ${firstItem.place} ${firstItem.note}`.toLowerCase()
-      : ''
-    const location = weatherLocations.find((candidate) =>
-      candidate.keywords.some((keyword) => scheduleText.includes(keyword)),
-    ) ?? weatherLocations.find((candidate) => candidate.name === 'Orlando')!
     const controller = new AbortController()
+    const fallbackLocation = weatherLocations.find((candidate) => candidate.name === 'Orlando')!
 
-    const loadWeather = async () => {
-      setWeatherState({ location: location.name, description: '讀取中', temperature: '--' })
-
+    const loadWeather = async (latitude: number, longitude: number, locationName: string) => {
+      setWeatherState({ location: locationName, description: '讀取中', temperature: '--' })
       try {
-        const params = new URLSearchParams({
-          latitude: String(location.latitude),
-          longitude: String(location.longitude),
-          daily: 'weather_code,temperature_2m_max,temperature_2m_min',
-          timezone: 'auto',
-          forecast_days: '16',
-        })
-        const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, {
-          signal: controller.signal,
-        })
+        const params = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), current: 'temperature_2m,weather_code', timezone: 'auto' })
+        const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, { signal: controller.signal })
         if (!response.ok) throw new Error('Weather request failed')
-
-        const data = await response.json() as {
-          daily?: {
-            time?: string[]
-            weather_code?: number[]
-            temperature_2m_max?: number[]
-            temperature_2m_min?: number[]
-          }
-        }
-        const year = new Date().getFullYear()
-        const dateMatch = weatherPlan.date.match(/(\d{1,2})\/(\d{1,2})/)
-        const requestedDate = dateMatch
-          ? `${year}-${dateMatch[1].padStart(2, '0')}-${dateMatch[2].padStart(2, '0')}`
-          : ''
-        const dateIndex = data.daily?.time?.indexOf(requestedDate) ?? -1
-
-        if (dateIndex < 0) {
-          setWeatherState({ location: location.name, description: '預報尚未開放', temperature: '--' })
-          return
-        }
-
-        const max = data.daily?.temperature_2m_max?.[dateIndex]
-        const min = data.daily?.temperature_2m_min?.[dateIndex]
+        const data = await response.json() as { current?: { temperature_2m?: number; weather_code?: number } }
         setWeatherState({
-          location: location.name,
-          description: weatherDescription(data.daily?.weather_code?.[dateIndex]),
-          temperature: max !== undefined && min !== undefined ? `${Math.round(min)}°–${Math.round(max)}°C` : '--',
+          location: locationName,
+          description: weatherDescription(data.current?.weather_code),
+          temperature: data.current?.temperature_2m !== undefined ? `${Math.round(data.current.temperature_2m)}°C` : '--',
         })
       } catch (error) {
-        if ((error as Error).name !== 'AbortError') {
-          setWeatherState({ location: location.name, description: '無法取得', temperature: '--' })
-        }
+        if ((error as Error).name !== 'AbortError') setWeatherState({ location: locationName, description: '無法取得', temperature: '--' })
       }
     }
 
-    void loadWeather()
+    if (!navigator.geolocation) {
+      void loadWeather(fallbackLocation.latitude, fallbackLocation.longitude, 'Orlando')
+    } else {
+      navigator.geolocation.getCurrentPosition(
+        (position) => void loadWeather(position.coords.latitude, position.coords.longitude, '目前位置'),
+        () => void loadWeather(fallbackLocation.latitude, fallbackLocation.longitude, 'Orlando'),
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 },
+      )
+    }
+
     return () => controller.abort()
-  }, [selectedDate, tripData.dayPlans])
+  }, [])
 
   const selectedPlan = useMemo(
     () => tripData.dayPlans.find((day) => day.date === selectedDate) ?? tripData.dayPlans[0] ?? localTripData.dayPlans[0],
@@ -869,12 +869,14 @@ function App() {
     }
 
     if (dataEditor.kind === 'booking') {
-      const item = {
+        const item = {
         title: dataDraft.title.trim(),
         label: dataDraft.label || 'Info',
         body: dataDraft.body || '',
         meta: dataDraft.meta || '',
         accent: dataDraft.accent || 'bg-emerald-100 text-emerald-700',
+          startDate: dataDraft.startDate || '',
+          endDate: dataDraft.endDate || '',
         ...(dataDraft.attachmentUrl ? {
           attachment: {
             url: dataDraft.attachmentUrl,
@@ -1064,17 +1066,19 @@ function App() {
               </div>
             </section>
 
-            <section className="soft-card section-info mb-5 p-4">
-              <div className="flex items-center justify-between gap-3">
+            <section className="weather-card mb-5 overflow-hidden p-5">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[10px] uppercase tracking-[0.18em] text-muted">Weather</p>
-                  {weatherState.description}
-                  <p className="mt-1 text-xs text-muted">{weatherState.location} · Open-Meteo</p>
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/75">Weather forecast</p>
+                  <h2 className="mt-2 text-2xl font-black text-white">{weatherState.location}</h2>
+                  <div className="mt-1 text-base font-bold text-white/90">{weatherState.description}</div>
+                  <p className="mt-1 text-[10px] font-bold text-white/65">目前位置 · Open-Meteo</p>
                 </div>
-                <div className="rounded-[20px] bg-sage px-3 py-2 text-right">
-                  <div className="text-[9px] uppercase tracking-[0.14em] text-muted">temp</div>
-                  <div className="text-lg font-black text-olive">{weatherState.temperature}</div>
-                </div>
+                <div className="weather-sun" aria-hidden="true">☀</div>
+              </div>
+              <div className="mt-5 flex items-end justify-between gap-3">
+                <div className="text-4xl font-black tracking-[-0.04em] text-white">{weatherState.temperature}</div>
+                <div className="rounded-2xl bg-white/20 px-3 py-2 text-right text-[10px] font-bold text-white/85">今日<br />即時天氣</div>
               </div>
             </section>
 
@@ -1175,13 +1179,24 @@ function App() {
                     <button
                       type="button"
                       onClick={() => setExpandedFlightIndex(expandedFlightIndex === index ? null : index)}
-                      className={`flex w-full items-center justify-between rounded-[20px] border px-4 py-3 text-left transition active:scale-[0.99] ${expandedFlightIndex === index ? 'border-[#80B95D] bg-[#effbea]' : 'border-[#e2e7dc] bg-white'}`}
+                      className={`flex w-full items-center justify-between rounded-[20px] border px-4 py-3 text-left transition active:scale-[0.99] ${isPastFlight(flight) ? 'border-[#e5e5e1] bg-[#f1f1ee] text-[#aaa89f]' : expandedFlightIndex === index ? 'border-[#80B95D] bg-[#effbea]' : 'border-[#e2e7dc] bg-white'}`}
                     >
-                      <div>
-                        <div className="text-sm font-black text-ink">{flight.flightNumber} · {flight.date}</div>
-                        <div className="mt-1 text-xs text-muted">{flight.departureAirport} {flight.departureTime} → {flight.arrivalAirport} {flight.arrivalTime}</div>
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                        <div className="w-12 shrink-0 text-center text-xs font-black leading-tight text-muted">{formatDateLabel(toDateInputValue(flight.date))}</div>
+                        <div className="flex min-w-0 flex-1 items-end justify-center gap-2">
+                          <div className="min-w-0 text-center">
+                            <div className="text-[10px] font-bold text-muted">{flight.departureTime || '--'}</div>
+                            <div className={`truncate text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-ink'}`}>{flight.departureAirport || '--'}</div>
+                          </div>
+                          <span className="pb-0.5 text-xs text-muted">→</span>
+                          <div className="min-w-0 text-center">
+                            <div className="text-[10px] font-bold text-muted">{flight.arrivalTime || '--'}</div>
+                            <div className={`truncate text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-ink'}`}>{flight.arrivalAirport || '--'}</div>
+                          </div>
+                        </div>
+                        <div className={`w-14 shrink-0 text-right text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-olive'}`}>{flight.flightNumber || '--'}</div>
                       </div>
-                      <span className="text-lg font-black text-olive">{expandedFlightIndex === index ? '−' : '+'}</span>
+                      <span className={`ml-2 text-lg font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-olive'}`}>{isPastFlight(flight) ? '已過期' : expandedFlightIndex === index ? '−' : '+'}</span>
                     </button>
                     {expandedFlightIndex === index && (
               <section className="overflow-hidden rounded-[30px] border border-white/80 bg-white shadow-soft">
@@ -1230,7 +1245,7 @@ function App() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => openDataEditor({ kind: 'flight', index: expandedFlightIndex }, { ...flightInfo, title: flightInfo.flightNumber })}
+                  onClick={() => openDataEditor({ kind: 'flight', index: expandedFlightIndex }, { ...flightInfo, date: toDateInputValue(flightInfo.date), title: flightInfo.flightNumber })}
                   className="mx-4 mb-4 flex w-[calc(100%-2rem)] items-center justify-center gap-2 rounded-[20px] border-2 border-[#DCE4D2] py-3 text-sm font-black text-[#9B907E]"
                 >
                   編輯航班資訊
@@ -1260,20 +1275,24 @@ function App() {
                   .map((card) => {
                     const index = bookingCards.indexOf(card)
                     return (
-                    <div key={card.title} className="soft-card mb-3 p-4">
+                    <div key={`${card.title}-${card.startDate}`} className="soft-card mb-3 p-4">
                       <div className="mb-3 flex items-center justify-between">
+                        <div className="min-w-0">
+                          <div className="truncate text-base font-black text-ink">{card.title}</div>
+                          {card.startDate && <div className="mt-1 text-xs font-bold text-muted">{formatDateLabel(card.startDate)}{card.endDate ? ` - ${formatDateLabel(card.endDate)}` : ''}</div>}
+                        </div>
                         <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${card.accent}`}>
                           {card.label}
                         </span>
                         <button
                           type="button"
-                          onClick={() => openDataEditor({ kind: 'booking', index }, { title: card.title, label: card.label, body: card.body, meta: card.meta, accent: card.accent, attachmentUrl: card.attachment?.url ?? '', attachmentName: card.attachment?.name ?? '', attachmentType: card.attachment?.type ?? '' })}
+                          onClick={() => openDataEditor({ kind: 'booking', index }, { title: card.title, label: card.label, body: card.body, meta: card.meta, accent: card.accent, startDate: card.startDate ?? '', endDate: card.endDate ?? '', attachmentUrl: card.attachment?.url ?? '', attachmentName: card.attachment?.name ?? '', attachmentType: card.attachment?.type ?? '' })}
                           className="text-[10px] font-black uppercase tracking-[0.14em] text-olive"
                         >
                           編輯
                         </button>
                       </div>
-                      <div className="text-lg font-black tracking-[-0.03em] text-ink">{card.body}</div>
+                      <div className="mt-3 text-lg font-black tracking-[-0.03em] text-ink">{card.body}</div>
                       <div className="mt-1 text-sm text-muted">{card.meta}</div>
                       {card.attachment && (
                         <div className="mt-3 flex flex-wrap gap-2">
@@ -1714,6 +1733,12 @@ function App() {
                     <label className="block text-xs font-bold text-muted">類型<input value={dataDraft.label ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, label: event.target.value })} className="form-field" /></label>
                     <label className="block text-xs font-bold text-muted">內容<input value={dataDraft.body ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, body: event.target.value })} className="form-field" /></label>
                     <label className="block text-xs font-bold text-muted">補充資訊<input value={dataDraft.meta ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, meta: event.target.value })} className="form-field" /></label>
+                    {dataDraft.label === 'Hotel' && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className="text-xs font-bold text-muted">入住日期<input type="date" value={dataDraft.startDate ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, startDate: event.target.value })} className="form-field" /></label>
+                        <label className="text-xs font-bold text-muted">退房日期<input type="date" value={dataDraft.endDate ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, endDate: event.target.value })} className="form-field" /></label>
+                      </div>
+                    )}
                     <label className="block text-xs font-bold text-muted">
                       憑證檔案（PDF / JPG / PNG）
                       <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => void handleCertificateChange(event.target.files?.[0])} className="form-field file:mr-2 file:rounded-full file:border-0 file:bg-olive file:px-3 file:py-1 file:text-xs file:font-black file:text-white" />
@@ -1743,7 +1768,7 @@ function App() {
                     ].map(([key, label]) => (
                       <label key={key} className="text-xs font-bold text-muted">
                         {label}
-                        <input value={dataDraft[key] ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, [key]: event.target.value })} className="form-field" />
+                        <input type={key === 'date' ? 'date' : 'text'} value={key === 'date' ? toDateInputValue(dataDraft[key] ?? '') : dataDraft[key] ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, [key]: event.target.value })} className="form-field" />
                       </label>
                     ))}
                   </div>
@@ -1758,7 +1783,7 @@ function App() {
 
                 {dataEditor.kind === 'expense' && (
                   <div className="grid grid-cols-2 gap-3">
-                    <label className="text-xs font-bold text-muted">日期<input value={dataDraft.date ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, date: event.target.value })} className="form-field" /></label>
+                    <label className="text-xs font-bold text-muted">日期<input type="date" value={toDateInputValue(dataDraft.date ?? '')} onChange={(event) => setDataDraft({ ...dataDraft, date: event.target.value })} className="form-field" /></label>
                     <label className="text-xs font-bold text-muted">金額<input value={dataDraft.amount ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, amount: event.target.value })} className="form-field" /></label>
                     <label className="col-span-2 text-xs font-bold text-muted">付款人<input value={dataDraft.payer ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, payer: event.target.value })} className="form-field" /></label>
                   </div>

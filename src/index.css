@@ -97,4 +97,13 @@ textarea {
   .schedule-item {
     @apply rounded-[22px] border border-[#dce7ef] bg-[#f6fbff] shadow-sm;
   }
+
+  .weather-card {
+    @apply rounded-[30px] border border-[#35a9dc] bg-[#39b5e8] shadow-soft;
+    background-image: linear-gradient(135deg, #43c4ee 0%, #269fd2 100%);
+  }
+
+  .weather-sun {
+    @apply flex h-14 w-14 items-center justify-center rounded-full bg-[#f7d85e] text-3xl text-[#fff8c8] shadow-sm;
+  }
 }
