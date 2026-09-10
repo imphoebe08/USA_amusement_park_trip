@@ -1762,7 +1762,7 @@ function App() {
                   disabled={isSaving}
                   className="flex-1 rounded-full bg-olive px-4 py-2.5 text-xs font-black text-white disabled:opacity-50"
                 >
-                  {isSaving ? '儲存中…' : '儲存到 Firebase'}
+                  {isSaving ? '儲存中…' : '儲存'}
                 </button>
               </div>
             </div>
@@ -1889,7 +1889,7 @@ function App() {
                   </button>
                 )}
                 <button type="button" onClick={() => void saveDataEditor()} disabled={isSaving} className="flex-1 rounded-full bg-olive px-4 py-2.5 text-xs font-black text-white disabled:opacity-50">
-                  {isSaving ? '儲存中…' : '儲存到 Firebase'}
+                  {isSaving ? '儲存中…' : '儲存'}
                 </button>
               </div>
             </div>
