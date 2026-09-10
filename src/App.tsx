@@ -609,6 +609,8 @@ function App() {
   const [dataEditor, setDataEditor] = useState<DataEditor | null>(null)
   const [dataDraft, setDataDraft] = useState<Record<string, string>>({})
   const [isSaving, setIsSaving] = useState(false)
+  const [draggingScheduleIndex, setDraggingScheduleIndex] = useState<number | null>(null)
+  const [draggingRouteIndex, setDraggingRouteIndex] = useState<number | null>(null)
 
   useEffect(() => {
     let isCancelled = false
@@ -1020,6 +1022,54 @@ function App() {
     }
   }
 
+  const reorderScheduleItems = async (targetIndex: number) => {
+    if (draggingScheduleIndex === null || draggingScheduleIndex === targetIndex) return
+    const nextDayPlans = tripData.dayPlans.map((day) => {
+      if (day.date !== selectedPlan.date) return day
+      const items = [...day.items]
+      const [movedItem] = items.splice(draggingScheduleIndex, 1)
+      items.splice(targetIndex, 0, movedItem)
+      return { ...day, items }
+    })
+    const nextTripData = { ...tripData, dayPlans: nextDayPlans }
+    setDraggingScheduleIndex(null)
+    try {
+      await saveTripDataToFirebase(nextTripData)
+      setTripData(nextTripData)
+      setErrorMessage(null)
+    } catch (error) {
+      console.error('Failed to reorder itinerary items:', error)
+      setErrorMessage(getFirebaseErrorMessage(error, '行程排序儲存失敗'))
+    }
+  }
+
+  const reorderParkRoutes = async (targetIndex: number) => {
+    if (draggingRouteIndex === null || draggingRouteIndex === targetIndex || !selectedParkDay) return
+    const parkSections = tripData.parkSections.map((park) => {
+      if (park.id !== selectedPark.id) return park
+      return {
+        ...park,
+        days: park.days.map((day) => {
+          if (day.id !== selectedParkDay.id) return day
+          const routes = [...day.routes]
+          const [movedRoute] = routes.splice(draggingRouteIndex, 1)
+          routes.splice(targetIndex, 0, movedRoute)
+          return { ...day, routes }
+        }),
+      }
+    })
+    const nextTripData = { ...tripData, parkSections }
+    setDraggingRouteIndex(null)
+    try {
+      await saveTripDataToFirebase(nextTripData)
+      setTripData(nextTripData)
+      setErrorMessage(null)
+    } catch (error) {
+      console.error('Failed to reorder park routes:', error)
+      setErrorMessage(getFirebaseErrorMessage(error, '樂園路線排序儲存失敗'))
+    }
+  }
+
   const renderedContent = (() => {
     if (isLoading) {
       return (
@@ -1109,8 +1159,17 @@ function App() {
                           : 'bg-violet-100 text-violet-700'
 
                   return (
-                    <div key={`${item.time}-${item.title}`} className="schedule-item flex gap-3 rounded-[22px] p-3">
+                    <div
+                      key={`${item.time}-${item.title}`}
+                      draggable
+                      onDragStart={() => setDraggingScheduleIndex(index)}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={() => void reorderScheduleItems(index)}
+                      onDragEnd={() => setDraggingScheduleIndex(null)}
+                      className={`schedule-item flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingScheduleIndex === index ? 'opacity-50' : ''}`}
+                    >
                       <div className="flex w-14 flex-col items-center pt-1">
+                        <div className="mb-1 text-[10px] text-muted" title="拖曳排序">☷</div>
                         <div className="text-[11px] font-black text-muted">{item.time}</div>
                         <div className="mt-2 h-8 w-px bg-olive/20" />
                       </div>
@@ -1424,9 +1483,17 @@ function App() {
                     }
 
                     return (
-                      <div key={`${selectedParkDay.id}-${route.time}-${route.title}`} className="rounded-[20px] bg-transparent p-3">
+                      <div
+                        key={`${selectedParkDay.id}-${route.time}-${route.title}`}
+                        draggable
+                        onDragStart={() => setDraggingRouteIndex(index)}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={() => void reorderParkRoutes(index)}
+                        onDragEnd={() => setDraggingRouteIndex(null)}
+                        className={`park-route-item cursor-grab rounded-[20px] bg-transparent p-3 active:cursor-grabbing ${draggingRouteIndex === index ? 'opacity-50' : ''}`}
+                      >
                         <div className="flex items-center justify-between gap-2">
-                          <div className="text-[11px] font-black text-muted">{route.time}</div>
+                          <div className="flex items-center gap-2"><span className="text-sm text-muted" title="拖曳排序">☷</span><div className="text-[11px] font-black text-muted">{route.time}</div></div>
                           <span className={`label-chip ${colorMap[route.type]}`}>{route.type}</span>
                         </div>
                         <div className="mt-2 flex items-center justify-between gap-2">
