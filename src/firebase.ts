@@ -10,17 +10,19 @@ import {
 import { getStorage, type FirebaseStorage } from 'firebase/storage'
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyB6qybkmnYtwzK9_6FGjpcdylfyclQMeQE',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'usa-amusement-park-trip.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'usa-amusement-park-trip',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'usa-amusement-park-trip.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '485141779603',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:485141779603:web:363189e3552b353b616966',
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || 'G-NY153KWB6E',
 }
 
-const isFirebaseConfigured = Object.values(firebaseConfig).every(
-  (value) => typeof value === 'string' && value.trim().length > 0,
+const isFirebaseConfigured = Object.entries(firebaseConfig)
+  .filter(([key]) => key !== 'measurementId')
+  .every(([, value]) =>
+    typeof value === 'string' && value.trim().length > 0,
 )
 
 export const app: FirebaseApp | null = isFirebaseConfigured
@@ -66,7 +68,7 @@ if (db) {
 }
 
 export const ensureAnonymousAuth = async () => {
-  if (!auth || import.meta.env.VITE_FIREBASE_USE_ANONYMOUS_AUTH !== 'true') {
+  if (!auth) {
     return null
   }
 
@@ -79,10 +81,7 @@ export const ensureAnonymousAuth = async () => {
     return result.user
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'auth/configuration-not-found') {
-      console.warn(
-        'Firebase Anonymous Authentication is not enabled. Firestore will be attempted without an authenticated user.',
-      )
-      return null
+      throw new Error('Firebase Anonymous Authentication 尚未啟用，請在 Firebase Console 開啟 Anonymous sign-in。')
     }
 
     throw error

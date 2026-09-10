@@ -46,7 +46,7 @@ textarea {
 
 @layer components {
   .soft-card {
-    @apply rounded-[28px] border bg-white/90 shadow-soft;
+    @apply rounded-[28px] border bg-white shadow-soft;
     border-color: #e2e7dc;
   }
 

@@ -17,9 +17,10 @@ import {
   faTicket,
   faUsers,
 } from '@fortawesome/free-solid-svg-icons'
+import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 
-import { db, ensureAnonymousAuth } from './firebase'
+import { db, ensureAnonymousAuth, storage } from './firebase'
 
 type TabId = 'schedule' | 'bookings' | 'expense' | 'park' | 'planning' | 'members'
 type Category = '景點' | '美食' | '交通' | '住宿'
@@ -55,7 +56,7 @@ type DayPlan = {
 }
 
 type ScheduleItem = DayPlan['items'][number]
-type DataEditorKind = 'booking' | 'flight' | 'tripSettings' | 'expense' | 'task' | 'member' | 'route'
+type DataEditorKind = 'booking' | 'flight' | 'tripSettings' | 'expense' | 'task' | 'member' | 'route' | 'parkDay'
 type DataEditor = {
   kind: DataEditorKind
   index: number | null
@@ -95,6 +96,7 @@ type TripData = {
     body: string
     meta: string
     accent: string
+    attachment?: { url: string; name: string; type: string }
   }[]
   expenseEntries: {
     date: string
@@ -156,6 +158,58 @@ const weatherDescription = (code: number | undefined) => {
   if ([71, 73, 75, 77, 85, 86].includes(code)) return '降雪'
   if ([95, 96, 99].includes(code)) return '雷雨'
   return '多雲'
+}
+
+const compressImageToWebp = async (file: File) => {
+  const imageUrl = URL.createObjectURL(file)
+  try {
+    const image = new Image()
+    image.src = imageUrl
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve()
+      image.onerror = () => reject(new Error('無法讀取圖片。'))
+    })
+
+    const maxDimension = 1800
+    const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+    canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height)
+
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob)
+        else reject(new Error('圖片壓縮失敗。'))
+      }, 'image/webp', 0.82)
+    })
+  } finally {
+    URL.revokeObjectURL(imageUrl)
+  }
+}
+
+const uploadCertificate = async (file: File) => {
+  if (!storage) throw new Error('Firebase Storage 尚未設定。')
+  const isImage = file.type.startsWith('image/')
+  const content = isImage ? await compressImageToWebp(file) : file
+  const extension = isImage ? 'webp' : 'pdf'
+  const baseName = file.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_')
+  const fileRef = storageRef(storage, `trip/orlando-escape/certificates/${Date.now()}-${baseName}.${extension}`)
+  const snapshot = await uploadBytes(fileRef, content, { contentType: isImage ? 'image/webp' : 'application/pdf' })
+  return {
+    url: await getDownloadURL(snapshot.ref),
+    name: file.name,
+    type: isImage ? 'image/webp' : 'application/pdf',
+  }
+}
+
+const getFirebaseErrorMessage = (error: unknown, fallback: string) => {
+  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+  if (code.includes('permission-denied')) {
+    return 'Firebase 拒絕寫入：請確認已啟用 Anonymous Authentication，且 Firestore Rules 允許 request.auth。'
+  }
+  if (error instanceof Error && error.message) return error.message
+  return fallback
 }
 
 const getFlightDate = (dateText: string) => {
@@ -449,6 +503,22 @@ const normalizeTripData = (value: Partial<TripData> | null | undefined): TripDat
   parkSections: Array.isArray(value?.parkSections) ? (value.parkSections as ParkSection[]) : localTripData.parkSections,
 })
 
+const removeUndefined = <T,>(value: T): T => {
+  if (Array.isArray(value)) {
+    return value.map((item) => removeUndefined(item)) as T
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, removeUndefined(entry)]),
+    ) as T
+  }
+
+  return value
+}
+
 const getTripDataFromFirebase = async (): Promise<TripData> => {
   if (!db) {
     return localTripData
@@ -465,7 +535,7 @@ const getTripDataFromFirebase = async (): Promise<TripData> => {
   ])
 
   if (!snapshot.exists()) {
-    await setDoc(docRef, localTripData)
+    await setDoc(docRef, removeUndefined(localTripData))
     return localTripData
   }
 
@@ -478,7 +548,7 @@ const saveTripDataToFirebase = async (tripData: TripData) => {
   }
 
   await ensureAnonymousAuth()
-  await setDoc(doc(db, 'trip', 'orlando-escape'), tripData)
+  await setDoc(doc(db, 'trip', 'orlando-escape'), removeUndefined(tripData))
 }
 
 const emptyScheduleItem: ScheduleItem = {
@@ -502,6 +572,7 @@ function App() {
   const [preparationMode, setPreparationMode] = useState('待辦')
   const [preparationAssignee, setPreparationAssignee] = useState('全體')
   const [weatherState, setWeatherState] = useState({ location: '讀取中', description: '讀取中', temperature: '--' })
+  const [previewAttachment, setPreviewAttachment] = useState<{ url: string; name: string; type: string } | null>(null)
   const [editingItem, setEditingItem] = useState<{ date: string; index: number | null } | null>(null)
   const [draftItem, setDraftItem] = useState<ScheduleItem>(emptyScheduleItem)
   const [dataEditor, setDataEditor] = useState<DataEditor | null>(null)
@@ -521,7 +592,7 @@ function App() {
       } catch (error) {
         console.error('Failed to load Firestore trip data:', error)
         if (!isCancelled) {
-          setErrorMessage(null)
+          setErrorMessage(getFirebaseErrorMessage(error, 'Firebase 資料讀取失敗'))
           setTripData(localTripData)
         }
       } finally {
@@ -559,10 +630,10 @@ function App() {
 
   useEffect(() => {
     const weatherPlan = tripData.dayPlans.find((day) => day.date === selectedDate) ?? tripData.dayPlans[0] ?? localTripData.dayPlans[0]
-    const scheduleText = weatherPlan.items
-      .map((item) => `${item.title} ${item.place} ${item.note}`)
-      .join(' ')
-      .toLowerCase()
+    const firstItem = weatherPlan.items[0]
+    const scheduleText = firstItem
+      ? `${firstItem.title} ${firstItem.place} ${firstItem.note}`.toLowerCase()
+      : ''
     const location = weatherLocations.find((candidate) =>
       candidate.keywords.some((keyword) => scheduleText.includes(keyword)),
     ) ?? weatherLocations.find((candidate) => candidate.name === 'Orlando')!
@@ -673,9 +744,9 @@ function App() {
 
       const nextItems = [...day.items]
       if (editingItem.index === null) {
-        nextItems.push({ ...draftItem, title: draftItem.title.trim(), time: draftItem.time.trim(), mapUrl: draftItem.mapUrl?.trim() })
+        nextItems.push(removeUndefined({ ...draftItem, title: draftItem.title.trim(), time: draftItem.time.trim(), mapUrl: draftItem.mapUrl?.trim() }))
       } else {
-        nextItems[editingItem.index] = { ...draftItem, title: draftItem.title.trim(), time: draftItem.time.trim(), mapUrl: draftItem.mapUrl?.trim() }
+        nextItems[editingItem.index] = removeUndefined({ ...draftItem, title: draftItem.title.trim(), time: draftItem.time.trim(), mapUrl: draftItem.mapUrl?.trim() })
       }
 
       return { ...day, items: nextItems }
@@ -691,7 +762,7 @@ function App() {
       setErrorMessage(null)
     } catch (error) {
       console.error('Failed to save itinerary item:', error)
-      setErrorMessage('儲存失敗，請確認 Firestore rules 已允許目前使用者寫入。')
+      setErrorMessage(getFirebaseErrorMessage(error, '行程儲存失敗'))
     } finally {
       setIsSaving(false)
     }
@@ -723,7 +794,7 @@ function App() {
       setErrorMessage(null)
     } catch (error) {
       console.error('Failed to delete itinerary item:', error)
-      setErrorMessage('刪除失敗，請確認 Firestore rules 已允許目前使用者寫入。')
+      setErrorMessage(getFirebaseErrorMessage(error, '行程刪除失敗'))
     } finally {
       setIsSaving(false)
     }
@@ -733,6 +804,31 @@ function App() {
     setDataEditor(editor)
     setDataDraft(draft)
     setErrorMessage(null)
+  }
+
+  const handleCertificateChange = async (file: File | undefined) => {
+    if (!file) return
+    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setErrorMessage('憑證只支援 PDF、JPG、PNG 或 WebP。')
+      return
+    }
+
+    setIsSaving(true)
+    try {
+      const attachment = await uploadCertificate(file)
+      setDataDraft((current) => ({
+        ...current,
+        attachmentUrl: attachment.url,
+        attachmentName: attachment.name,
+        attachmentType: attachment.type,
+      }))
+      setErrorMessage(null)
+    } catch (error) {
+      console.error('Failed to upload certificate:', error)
+      setErrorMessage('憑證上傳失敗，請確認 Firebase Storage rules。')
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const closeDataEditor = () => {
@@ -779,6 +875,13 @@ function App() {
         body: dataDraft.body || '',
         meta: dataDraft.meta || '',
         accent: dataDraft.accent || 'bg-emerald-100 text-emerald-700',
+        ...(dataDraft.attachmentUrl ? {
+          attachment: {
+            url: dataDraft.attachmentUrl,
+            name: dataDraft.attachmentName || 'certificate',
+            type: dataDraft.attachmentType || 'application/pdf',
+          },
+        } : {}),
       }
       const bookingCards = [...tripData.bookingCards]
       if (dataEditor.index === null) bookingCards.push(item)
@@ -839,6 +942,16 @@ function App() {
       nextTripData = { ...tripData, parkSections }
     }
 
+    if (dataEditor.kind === 'parkDay' && dataEditor.parkId && dataEditor.dayId) {
+      nextTripData = {
+        ...tripData,
+        parkSections: tripData.parkSections.map((park) => park.id !== dataEditor.parkId ? park : {
+          ...park,
+          days: park.days.map((day) => day.id === dataEditor.dayId ? { ...day, name: dataDraft.title.trim() } : day),
+        }),
+      }
+    }
+
     setIsSaving(true)
     try {
       await saveTripDataToFirebase(nextTripData)
@@ -847,7 +960,7 @@ function App() {
       setErrorMessage(null)
     } catch (error) {
       console.error('Failed to save data:', error)
-      setErrorMessage('儲存失敗，請確認 Firebase rules 已允許寫入。')
+      setErrorMessage(getFirebaseErrorMessage(error, '資料儲存失敗'))
     } finally {
       setIsSaving(false)
     }
@@ -883,7 +996,7 @@ function App() {
       setErrorMessage(null)
     } catch (error) {
       console.error('Failed to delete data:', error)
-      setErrorMessage('刪除失敗，請確認 Firebase rules 已允許寫入。')
+      setErrorMessage(getFirebaseErrorMessage(error, '資料刪除失敗'))
     } finally {
       setIsSaving(false)
     }
@@ -901,7 +1014,7 @@ function App() {
       setErrorMessage(null)
     } catch (error) {
       console.error('Failed to update task:', error)
-      setErrorMessage('更新待辦事項失敗，請確認 Firebase rules 已允許寫入。')
+      setErrorMessage(getFirebaseErrorMessage(error, '待辦事項更新失敗'))
     }
   }
 
@@ -1154,7 +1267,7 @@ function App() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => openDataEditor({ kind: 'booking', index }, { title: card.title, label: card.label, body: card.body, meta: card.meta, accent: card.accent })}
+                          onClick={() => openDataEditor({ kind: 'booking', index }, { title: card.title, label: card.label, body: card.body, meta: card.meta, accent: card.accent, attachmentUrl: card.attachment?.url ?? '', attachmentName: card.attachment?.name ?? '', attachmentType: card.attachment?.type ?? '' })}
                           className="text-[10px] font-black uppercase tracking-[0.14em] text-olive"
                         >
                           編輯
@@ -1162,6 +1275,12 @@ function App() {
                       </div>
                       <div className="text-lg font-black tracking-[-0.03em] text-ink">{card.body}</div>
                       <div className="mt-1 text-sm text-muted">{card.meta}</div>
+                      {card.attachment && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button type="button" onClick={() => setPreviewAttachment(card.attachment!)} className="rounded-full bg-sky-100 px-3 py-1.5 text-xs font-black text-sky-700">預覽憑證</button>
+                          <a href={card.attachment.url} download={card.attachment.name} target="_blank" rel="noreferrer" className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-700">下載</a>
+                        </div>
+                      )}
                     </div>
                     )
                   })}
@@ -1251,9 +1370,8 @@ function App() {
             <section className="soft-card section-park p-2.5">
               <div className="flex gap-2 overflow-x-auto">
                 {selectedPark.days.map((day) => (
-                  <button key={day.id} type="button" onClick={() => setSelectedParkDayId(day.id)} className={`min-w-[110px] rounded-[18px] px-3 py-2 text-left text-xs font-black ${selectedParkDay?.id === day.id ? 'bg-violet-700 text-white' : 'bg-white text-muted'}`}>
-                    <span className="block text-[9px] uppercase tracking-[0.12em] opacity-75">{day.date}</span>
-                    <span className="mt-1 block truncate">{day.name}</span>
+                  <button key={day.id} type="button" onClick={() => setSelectedParkDayId(day.id)} className={`min-w-[92px] rounded-[18px] px-3 py-2 text-center text-xs font-black ${selectedParkDay?.id === day.id ? 'bg-violet-700 text-white' : 'bg-white text-muted'}`}>
+                    <span className="block text-[11px] font-black">{day.date}</span>
                   </button>
                 ))}
               </div>
@@ -1261,11 +1379,12 @@ function App() {
 
             {selectedParkDay && (
               <section key={selectedParkDay.id} className="soft-card section-park p-4">
-                <div className="mb-3 flex items-center justify-between">
+                <div className="mb-3">
                   <div>
-                    <p className="text-[9px] uppercase tracking-[0.14em] text-muted">{selectedParkDay.date}</p>
-                    <h3 className="mt-1 text-base font-black text-ink">{selectedParkDay.name}</h3>
+                    <p className="text-[9px] uppercase tracking-[0.14em] text-muted">Title</p>
+                    <button type="button" onClick={() => openDataEditor({ kind: 'parkDay', index: 0, parkId: selectedPark.id, dayId: selectedParkDay.id }, { title: selectedParkDay.name })} className="mt-1 text-left text-base font-black text-ink">{selectedParkDay.name}</button>
                   </div>
+                  <div className="mt-3 flex justify-end">
                   <button
                     type="button"
                     onClick={() => openDataEditor({ kind: 'route', index: null, parkId: selectedPark.id, dayId: selectedParkDay.id }, { type: '景點' })}
@@ -1273,6 +1392,7 @@ function App() {
                   >
                     + 路線
                   </button>
+                  </div>
                 </div>
 
                 <div className="space-y-3">
@@ -1594,6 +1714,15 @@ function App() {
                     <label className="block text-xs font-bold text-muted">類型<input value={dataDraft.label ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, label: event.target.value })} className="form-field" /></label>
                     <label className="block text-xs font-bold text-muted">內容<input value={dataDraft.body ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, body: event.target.value })} className="form-field" /></label>
                     <label className="block text-xs font-bold text-muted">補充資訊<input value={dataDraft.meta ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, meta: event.target.value })} className="form-field" /></label>
+                    <label className="block text-xs font-bold text-muted">
+                      憑證檔案（PDF / JPG / PNG）
+                      <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => void handleCertificateChange(event.target.files?.[0])} className="form-field file:mr-2 file:rounded-full file:border-0 file:bg-olive file:px-3 file:py-1 file:text-xs file:font-black file:text-white" />
+                    </label>
+                    {dataDraft.attachmentUrl && (
+                      <button type="button" onClick={() => setPreviewAttachment({ url: dataDraft.attachmentUrl, name: dataDraft.attachmentName || 'certificate', type: dataDraft.attachmentType || 'application/pdf' })} className="w-full rounded-2xl bg-sky-50 px-3 py-2 text-left text-xs font-black text-sky-700">
+                        已上傳：{dataDraft.attachmentName || '憑證'}，點擊預覽
+                      </button>
+                    )}
                   </>
                 )}
 
@@ -1662,7 +1791,7 @@ function App() {
               </div>
 
               <div className="mt-5 flex gap-2">
-                {dataEditor.index !== null && (
+                {dataEditor.index !== null && dataEditor.kind !== 'parkDay' && (
                   <button type="button" onClick={() => void deleteDataEditor()} disabled={isSaving} className="rounded-full border border-red-200 px-4 py-2.5 text-xs font-black text-red-600 disabled:opacity-50">
                     刪除
                   </button>
@@ -1670,6 +1799,27 @@ function App() {
                 <button type="button" onClick={() => void saveDataEditor()} disabled={isSaving} className="flex-1 rounded-full bg-olive px-4 py-2.5 text-xs font-black text-white disabled:opacity-50">
                   {isSaving ? '儲存中…' : '儲存到 Firebase'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {previewAttachment && (
+          <div className="fixed inset-0 z-30 flex items-center justify-center bg-ink/60 px-4 py-8 backdrop-blur-sm">
+            <div className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-[28px] bg-white shadow-xl">
+              <div className="flex items-center justify-between gap-3 border-b border-[#E6E7DE] px-4 py-3">
+                <div className="truncate text-sm font-black text-ink">{previewAttachment.name}</div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <a href={previewAttachment.url} download={previewAttachment.name} target="_blank" rel="noreferrer" className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-700">下載</a>
+                  <button type="button" onClick={() => setPreviewAttachment(null)} className="rounded-full bg-sage px-3 py-1.5 text-xs font-black text-olive">關閉</button>
+                </div>
+              </div>
+              <div className="min-h-0 overflow-auto bg-[#F7F4EB] p-3">
+                {previewAttachment.type.startsWith('image/') ? (
+                  <img src={previewAttachment.url} alt={previewAttachment.name} className="mx-auto h-auto max-w-full rounded-2xl bg-white" />
+                ) : (
+                  <iframe title={previewAttachment.name} src={previewAttachment.url} className="h-[70vh] w-full rounded-2xl border-0 bg-white" />
+                )}
               </div>
             </div>
           </div>
