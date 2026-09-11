@@ -1798,7 +1798,6 @@ function App() {
                 {dataEditor.kind === 'booking' && (
                   <>
                     <label className="block text-xs font-bold text-muted">類型<input value={dataDraft.label ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, label: event.target.value })} className="form-field" /></label>
-                    <label className="block text-xs font-bold text-muted">內容<input value={dataDraft.body ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, body: event.target.value })} className="form-field" /></label>
                     <label className="block text-xs font-bold text-muted">補充資訊<input value={dataDraft.meta ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, meta: event.target.value })} className="form-field" /></label>
                     {dataDraft.label === 'Hotel' && (
                       <div className="grid grid-cols-2 gap-3">
