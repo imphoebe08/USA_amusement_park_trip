@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faCalendarDays,
   faCar,
-  faCamera,
   faCartShopping,
   faFileLines,
   faHeart,
@@ -622,6 +622,21 @@ const emptyScheduleItem: ScheduleItem = {
 }
 
 function App() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      const saved = localStorage.getItem('trip-theme')
+      if (saved === 'light' || saved === 'dark') return saved
+    } catch { /* Storage may be unavailable in private browsing. */ }
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    try {
+      localStorage.setItem('trip-theme', theme)
+    } catch { /* Theme switching still works without persistence. */ }
+  }, [theme])
+
   const [tripData, setTripData] = useState<TripData>(localTripData)
   const [isLoading, setIsLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -630,7 +645,7 @@ function App() {
   const [selectedParkId, setSelectedParkId] = useState<'disney' | 'universal'>('disney')
   const [selectedParkDayId, setSelectedParkDayId] = useState('disney-day-1')
   const [bookingMode, setBookingMode] = useState<BookingMode>('flight')
-  const [expandedFlightIndex, setExpandedFlightIndex] = useState<number | null>(0)
+  const [expandedFlightIndex, setExpandedFlightIndex] = useState<number | null>(null)
   const [preparationMode, setPreparationMode] = useState('待辦')
   const [preparationAssignee, setPreparationAssignee] = useState('全體')
   const [weatherState, setWeatherState] = useState<WeatherSummary>({ location: '讀取中', description: '讀取中', temperature: '--' })
@@ -747,6 +762,21 @@ function App() {
   const selectedParkDay = selectedPark.days.find((day) => day.id === selectedParkDayId) ?? selectedPark.days[0]
 
   const bookingCards = tripData.bookingCards
+  const [flightNow, setFlightNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setFlightNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const nextFlight = tripData.flightInfo.reduce<{ flight: FlightInfo; departure: number } | null>((nearest, flight) => {
+    const date = toDateInputValue(flight.date)
+    if (!date) return nearest
+    const time = /^\d{2}:\d{2}$/.test(flight.departureTime) ? flight.departureTime : '23:59'
+    const departure = new Date(date + 'T' + time + ':00').getTime()
+    if (!Number.isFinite(departure) || departure < flightNow) return nearest
+    return !nearest || departure < nearest.departure ? { flight, departure } : nearest
+  }, null)?.flight
+
   const sortedFlights = [...tripData.flightInfo].sort((first, second) => Number(isPastFlight(first)) - Number(isPastFlight(second)))
   const visibleBookingCards = bookingCards
     .filter((card) => bookingMode === 'hotel' ? card.label === 'Hotel' : bookingMode === 'car' ? card.label === 'Car' : bookingMode === 'voucher' ? card.label === 'Voucher' : false)
@@ -1220,6 +1250,37 @@ function App() {
     }
   }
 
+  const openCurrentPageCreate = () => {
+    switch (activeTab) {
+      case 'schedule':
+        openNewScheduleItem()
+        break
+      case 'bookings':
+        if (bookingMode === 'flight') {
+          openDataEditor({ kind: 'flight', index: null }, { title: '', airline: '', flightNumber: '' })
+        } else {
+          openDataEditor({ kind: 'booking', index: null }, { title: '', label: bookingMode === 'hotel' ? 'Hotel' : bookingMode === 'car' ? 'Car' : 'Voucher', purchaser: '' })
+        }
+        break
+      case 'expense':
+        openDataEditor({ kind: 'expense', index: null }, { date: selectedDate, title: '', amount: '', payer: '' })
+        break
+      case 'park':
+        if (selectedParkDay) openDataEditor({ kind: 'route', index: null, parkId: selectedPark.id, dayId: selectedParkDay.id }, { type: '景點' })
+        break
+      case 'planning':
+        openDataEditor({ kind: 'task', index: null }, { title: '', assignee: preparationAssignee, done: 'false', mode: preparationMode })
+        break
+      case 'members':
+        openDataEditor({ kind: 'member', index: null }, { title: '', role: '旅伴', color: 'bg-emerald-200 text-emerald-700' })
+        break
+    }
+  }
+
+  const createLabel = activeTab === 'bookings'
+    ? { flight: '新增航段', hotel: '新增住宿', car: '新增租車', voucher: '新增憑證' }[bookingMode]
+    : { schedule: '新增行程', expense: '新增支出', park: '新增樂園路線', planning: `新增${preparationMode}`, members: '新增旅伴' }[activeTab]
+
   const renderedContent = (() => {
     if (isLoading) {
       return (
@@ -1231,12 +1292,6 @@ function App() {
 
     return (
       <main className="px-4 pb-6">
-        {errorMessage && (
-          <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-            {errorMessage}
-          </div>
-        )}
-
         {activeTab === 'schedule' && (
           <>
             <section className="mb-5">
@@ -1286,15 +1341,8 @@ function App() {
               <div className="mb-4 flex items-center justify-between">
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{selectedPlan.date}</p>
-                  <h3 className="mt-1 text-lg font-black tracking-[-0.02em]">Timeline</h3>
+                  <h3 className="mt-1 text-lg font-black tracking-[-0.02em]">Schedule</h3>
                 </div>
-                <button
-                  type="button"
-                  onClick={openNewScheduleItem}
-                  className="rounded-full bg-olive px-3 py-1.5 text-[10px] font-black text-white active:scale-95"
-                >
-                  + 新增
-                </button>
               </div>
 
               <div className="space-y-4">
@@ -1336,7 +1384,7 @@ function App() {
                         </div>
                         <span className={`label-chip mt-1 ${categoryStyle}`}>{item.category}</span>
                         <div className="mt-1 flex items-center gap-2 text-sm text-muted">
-                          <span>{item.place}</span>
+                          <span className="text-[#292524]">{item.place}</span>
                           {item.mapUrl && (
                             <a href={item.mapUrl} target="_blank" rel="noreferrer" className="font-black text-sky-700" aria-label="開啟 Google Maps">
                               <FontAwesomeIcon icon={faMapLocationDot} />
@@ -1377,19 +1425,26 @@ function App() {
               <>
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-base font-black">航班航段</h3>
-                <button type="button" onClick={() => openDataEditor({ kind: 'flight', index: null }, { title: '', airline: '', flightNumber: '' })} className="rounded-full bg-olive px-3 py-1.5 text-xs font-black text-white">
-                  + 新增航段
-                </button>
               </div>
               <div className="space-y-2">
-                {sortedFlights.map((flight) => {
+                {sortedFlights.map((flight, visibleIndex) => {
                   const index = tripData.flightInfo.indexOf(flight)
                   return (
-                  <div key={`${flight.flightNumber}-${flight.date}`} draggable onDragStart={() => setDraggingFlightIndex(sortedFlights.indexOf(flight))} onDragOver={(event) => { event.preventDefault(); setDragOverFlightIndex(sortedFlights.indexOf(flight)) }} onDrop={() => void reorderFlights(sortedFlights.indexOf(flight))} onDragEnd={() => { setDraggingFlightIndex(null); setDragOverFlightIndex(null) }} className={`draggable-card rounded-[20px] ${draggingFlightIndex === sortedFlights.indexOf(flight) ? 'dragging-card' : ''} ${dragOverFlightIndex === sortedFlights.indexOf(flight) ? 'drag-over-card' : ''}`}>
+                  <Fragment key={`${flight.flightNumber}-${flight.date}`}>
+                    {visibleIndex > 0 && isPastFlight(flight) && !isPastFlight(sortedFlights[visibleIndex - 1]) && (
+                      <div className="flex items-center gap-3 pb-3 pt-6" role="separator" aria-label="已過期航班">
+                        <div className="h-px flex-1 bg-muted/40" />
+                        <span className="text-xs font-bold text-muted">已過期航班</span>
+                        <div className="h-px flex-1 bg-muted/40" />
+                      </div>
+                    )}
+                  <div draggable onDragStart={() => setDraggingFlightIndex(sortedFlights.indexOf(flight))} onDragOver={(event) => { event.preventDefault(); setDragOverFlightIndex(sortedFlights.indexOf(flight)) }} onDrop={() => void reorderFlights(sortedFlights.indexOf(flight))} onDragEnd={() => { setDraggingFlightIndex(null); setDragOverFlightIndex(null) }} className={`draggable-card rounded-[20px] ${draggingFlightIndex === sortedFlights.indexOf(flight) ? 'dragging-card' : ''} ${dragOverFlightIndex === sortedFlights.indexOf(flight) ? 'drag-over-card' : ''}`}>
                     <button
                       type="button"
                       onClick={() => setExpandedFlightIndex(expandedFlightIndex === index ? null : index)}
-                      className={`flex w-full items-center justify-between rounded-[20px] border px-4 py-3 text-left transition active:scale-[0.99] ${isPastFlight(flight) ? 'border-[#e5e5e1] bg-[#f1f1ee] text-[#aaa89f]' : expandedFlightIndex === index ? 'border-[#80B95D] bg-[#effbea]' : 'border-[#e2e7dc] bg-white'}`}
+                      aria-expanded={expandedFlightIndex === index}
+                      aria-label={flight === nextFlight ? `${flight.flightNumber}，最近即將出發航班` : undefined}
+                      className={`flex w-full items-center justify-between rounded-[20px] border px-4 py-3 text-left transition active:scale-[0.99] ${flight === nextFlight ? 'next-flight' : isPastFlight(flight) ? 'border-[#e5e5e1] bg-[#f1f1ee] text-[#aaa89f]' : expandedFlightIndex === index ? 'border-[#80B95D] bg-[#effbea]' : 'border-[#e2e7dc] bg-white'}`}
                     >
                       <div className="flex min-w-0 flex-1 items-center gap-3">
                         <div className="w-12 shrink-0 text-center text-xs font-black leading-tight text-muted">{formatDateLabel(toDateInputValue(flight.date))}</div>
@@ -1464,6 +1519,7 @@ function App() {
               </section>
                     )}
                   </div>
+                  </Fragment>
                   )
                 })}
               </div>
@@ -1474,13 +1530,6 @@ function App() {
               <section className={bookingMode === 'hotel' ? 'soft-card p-4' : undefined}>
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <h3 className="text-lg font-black tracking-[-0.02em]">{bookingMode === 'hotel' ? '住宿資訊' : bookingMode === 'car' ? '租車資訊' : '其他預訂'}</h3>
-                  <button
-                    type="button"
-                    onClick={() => openDataEditor({ kind: 'booking', index: null }, { title: '', label: bookingMode === 'hotel' ? 'Hotel' : bookingMode === 'car' ? 'Car' : 'Voucher', purchaser: '' })}
-                    className="shrink-0 rounded-full bg-olive px-3 py-1.5 text-[10px] font-black text-white active:scale-95"
-                  >
-                    + 新增
-                  </button>
                 </div>
                 {bookingMode === 'hotel' && (
                   <div className="mb-3 flex justify-end">
@@ -1494,7 +1543,15 @@ function App() {
                     const index = bookingCards.indexOf(card)
                     const isExpired = isPastBooking(card)
                     return (
-                    <div key={`${card.title}-${card.startDate}`} draggable onDragStart={() => setDraggingBookingIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverBookingIndex(visibleIndex) }} onDrop={() => void reorderBookingCards(visibleIndex)} onDragEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} className={`draggable-card cursor-grab active:cursor-grabbing ${bookingMode === 'hotel' ? 'schedule-item mb-4 last:mb-0 flex gap-3 rounded-[22px] p-3' : 'booking-card soft-card mb-3 p-4'} ${isExpired ? 'opacity-45 grayscale' : ''} ${draggingBookingIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverBookingIndex === visibleIndex ? 'drag-over-card' : ''}`}>
+                    <Fragment key={`${card.title}-${card.startDate}`}>
+                      {bookingMode === 'hotel' && isExpired && (visibleIndex === 0 || !isPastBooking(visibleBookingCards[visibleIndex - 1])) && (
+                        <div className="flex items-center gap-3 pb-4 pt-3" role="separator" aria-label="已過期住宿">
+                          <div className="h-px flex-1 bg-muted/40" />
+                          <span className="text-xs font-bold text-muted">已過期住宿</span>
+                          <div className="h-px flex-1 bg-muted/40" />
+                        </div>
+                      )}
+                    <div draggable onDragStart={() => setDraggingBookingIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverBookingIndex(visibleIndex) }} onDrop={() => void reorderBookingCards(visibleIndex)} onDragEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} className={`draggable-card cursor-grab active:cursor-grabbing ${bookingMode === 'hotel' ? 'schedule-item mb-4 last:mb-0 flex gap-3 rounded-[22px] p-3' : 'booking-card soft-card mb-3 p-4'} ${isExpired ? 'opacity-45 grayscale' : ''} ${draggingBookingIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverBookingIndex === visibleIndex ? 'drag-over-card' : ''}`}>
                       {bookingMode === 'hotel' && (
                         <div className="flex w-14 shrink-0 flex-col items-center pt-1 text-center">
                           <div className="mb-1 text-[10px] text-muted" title="拖曳排序">☷</div>
@@ -1509,6 +1566,7 @@ function App() {
                       <div className={bookingMode === 'hotel' ? 'relative min-h-16 pr-20' : 'relative mb-3 min-h-12 pr-20'}>
                         <div className="min-w-0">
                           <div className={bookingMode === 'hotel' ? 'break-words font-black text-ink' : 'min-w-0 text-base font-black text-ink'}>{card.title}</div>
+                          {bookingMode === 'hotel' && isExpired && <div className="mt-1 text-xs font-bold text-muted">已過期</div>}
                           {bookingMode === 'hotel' && <span className="label-chip absolute right-0 top-0 bg-violet-100 text-violet-700">{card.label}</span>}
                           {bookingMode !== 'hotel' && card.startDate && <div className="mt-1 text-xs font-bold text-muted">{formatDateLabel(card.startDate)}{card.endDate ? ` - ${formatDateLabel(card.endDate)}` : ''}</div>}
                           {card.orderNumber && <div className="mt-1 text-xs font-bold text-muted">訂單編號：{card.orderNumber}</div>}
@@ -1561,6 +1619,7 @@ function App() {
                       )}
                       </div>
                     </div>
+                    </Fragment>
                     )
                   })}
               </section>
@@ -1578,13 +1637,6 @@ function App() {
                   <div className="text-3xl font-black tracking-[-0.05em] text-ink">NT$ 86,400</div>
                   <div className="mt-1 text-sm text-muted">USD 2,760</div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => openDataEditor({ kind: 'expense', index: null }, { date: selectedDate, title: '', amount: '', payer: '' })}
-                  className="rounded-full bg-olive px-3 py-2 text-xs font-black text-white active:scale-95"
-                >
-                  + Add
-                </button>
               </div>
             </section>
 
@@ -1603,7 +1655,7 @@ function App() {
               <h3 className="mb-3 text-base font-black">Daily details</h3>
               <div className="space-y-2">
                 {expenseEntries.map((entry, index) => (
-                  <div key={`${entry.date}-${entry.item}`} className="flex items-center justify-between rounded-[18px] bg-transparent px-3 py-2.5">
+                  <div key={`${entry.date}-${entry.item}`} className="flex items-center justify-between detail-card rounded-[18px] bg-transparent px-3 py-2.5">
                     <div>
                       <div className="font-bold text-ink">{entry.item}</div>
                       <div className="text-xs text-muted">{entry.date} · {entry.payer}</div>
@@ -1663,13 +1715,6 @@ function App() {
                     <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{selectedParkDay.date}</p>
                     <button type="button" onClick={() => openDataEditor({ kind: 'parkDay', index: 0, parkId: selectedPark.id, dayId: selectedParkDay.id }, { title: selectedParkDay.name })} className="mt-1 text-left text-lg font-black tracking-[-0.02em] text-ink">{selectedParkDay.name}</button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => openDataEditor({ kind: 'route', index: null, parkId: selectedPark.id, dayId: selectedParkDay.id }, { type: '景點' })}
-                    className="shrink-0 rounded-full bg-olive px-3 py-1.5 text-[10px] font-black text-white active:scale-95"
-                  >
-                    + 新增
-                  </button>
                 </div>
 
                 <div className="space-y-4">
@@ -1708,7 +1753,7 @@ function App() {
                             </button>
                           </div>
                           <span className={`label-chip mt-1 ${colorMap[route.type]}`}>{route.type}</span>
-                          <div className="mt-1 flex items-center gap-2 text-sm text-muted">{route.area}</div>
+                          <div className="mt-1 flex items-center gap-2 text-sm text-[#292524]">{route.area}</div>
                           <div className="mt-2 text-xs leading-5 text-ink/70">{route.note}</div>
                         </div>
                       </div>
@@ -1743,19 +1788,7 @@ function App() {
               </div>
             </section>
 
-            <section className="soft-card todo-composer p-4">
-              <div className="flex items-center gap-3">
-                <button type="button" className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#E5F2DD] text-xl text-olive" aria-label="拍照新增">
-                  <FontAwesomeIcon icon={faCamera} />
-                </button>
-                <div className="flex-1 rounded-2xl border border-[#DCE4D2] bg-transparent px-3 py-3 text-sm font-bold text-[#B8AD99]">
-                  新增{preparationMode}（全體）…
-                </div>
-                <button type="button" onClick={() => openDataEditor({ kind: 'task', index: null }, { title: '', assignee: preparationAssignee, done: 'false', mode: preparationMode })} className="flex h-12 w-12 items-center justify-center rounded-2xl bg-olive text-xl text-white shadow-sm" aria-label="新增待辦">
-                  <FontAwesomeIcon icon={faPlus} />
-                </button>
-              </div>
-            </section>
+
 
             {planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationAssignee === '全體' || task.assignee === preparationAssignee)).map((task, visibleIndex) => {
               const index = planningTasks.indexOf(task)
@@ -1779,7 +1812,7 @@ function App() {
 
             {planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationAssignee === '全體' || task.assignee === preparationAssignee)).length === 0 && (
               <section className="todo-empty p-5 text-center text-sm font-bold text-muted">
-                目前尚未建立{preparationMode}資料，請使用上方新增按鈕。
+                目前尚未建立{preparationMode}資料，請點選右下角「＋」新增。
               </section>
             )}
           </div>
@@ -1790,18 +1823,11 @@ function App() {
             <section className="soft-card p-4">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-lg font-black tracking-[-0.02em]">Travel crew</h2>
-                <button
-                  type="button"
-                  onClick={() => openDataEditor({ kind: 'member', index: null }, { title: '', role: '旅伴', color: 'bg-emerald-200 text-emerald-700' })}
-                  className="rounded-full bg-olive px-3 py-1.5 text-xs font-black text-white active:scale-95"
-                >
-                  + Add
-                </button>
               </div>
 
               <div className="space-y-3">
                   {members.map((member, index) => (
-                  <div key={member.name} className="flex items-center justify-between rounded-[18px] bg-transparent p-3">
+                  <div key={member.name} className="flex items-center justify-between detail-card rounded-[18px] bg-transparent p-3">
                     <div className="flex items-center gap-3">
                       <div className={`flex h-11 w-11 items-center justify-center rounded-full text-sm font-black ${member.color}`}>
                         {member.name.slice(0, 1)}
@@ -1830,7 +1856,16 @@ function App() {
 
   return (
     <div className="min-h-screen bg-sand text-ink">
-      <div className="mx-auto min-h-screen max-w-md bg-sand pb-28">
+      {errorMessage && createPortal(
+        <div className="pointer-events-none fixed inset-x-0 top-0 z-[100] px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
+          <div className="pointer-events-auto mx-auto flex max-h-[50dvh] max-w-md items-start gap-3 overflow-y-auto rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-xl">
+            <div role="alert" aria-atomic="true" className="min-w-0 flex-1 whitespace-pre-line break-words">{errorMessage}</div>
+            <button type="button" onClick={() => setErrorMessage(null)} aria-label="關閉系統警示" className="shrink-0 rounded-full px-2 py-1 text-xs font-black text-amber-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-700">關閉</button>
+          </div>
+        </div>,
+        document.body,
+      )}
+      <div className="mx-auto min-h-screen max-w-md bg-sand pb-44">
         <header className="px-4 pb-3 pt-5">
           <div className="mb-4 flex items-center justify-between">
             <div>
@@ -1839,13 +1874,16 @@ function App() {
             </div>
             <button
               type="button"
+              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+              aria-label={theme === 'light' ? '切換深色模式' : '切換淺色模式'}
+              title={theme === 'light' ? '切換深色模式' : '切換淺色模式'}
               className="flex h-11 w-11 items-center justify-center rounded-full border border-olive/10 bg-white/80 text-lg shadow-soft active:scale-95"
             >
-              ☼
+              {theme === 'light' ? '☾' : '☼'}
             </button>
           </div>
 
-          <div className="rounded-[30px] bg-gradient-to-br from-[#EAF0DB] via-[#F7F4EB] to-[#F7E9D6] p-4 shadow-soft">
+          <div className="rounded-[30px] bg-[#EAF0DB] p-4 shadow-soft">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.18em] text-muted">Next adventure</p>
@@ -2144,6 +2182,20 @@ function App() {
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {!isLoading && !editingItem && !dataEditor && !previewAttachment && (activeTab !== 'park' || selectedParkDay) && (
+          <div className="pointer-events-none fixed inset-x-0 bottom-24 z-10 mx-auto flex max-w-md justify-end px-4">
+            <button
+              type="button"
+              onClick={openCurrentPageCreate}
+              aria-label={createLabel}
+              title={createLabel}
+              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full bg-olive text-xl text-white shadow-lg transition hover:brightness-110 active:scale-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-olive"
+            >
+              <FontAwesomeIcon icon={faPlus} />
+            </button>
           </div>
         )}
 
