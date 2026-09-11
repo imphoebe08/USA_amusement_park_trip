@@ -9,7 +9,7 @@ import {
   faHeart,
   faHotel,
   faListCheck,
-  faMapLocationDot,
+  faLocationDot,
   faPen,
   faPlane,
   faPlus,
@@ -1364,8 +1364,9 @@ function App() {
                       onDragOver={(event) => { event.preventDefault(); setDragOverScheduleIndex(index) }}
                       onDrop={() => void reorderScheduleItems(index)}
                       onDragEnd={() => { setDraggingScheduleIndex(null); setDragOverScheduleIndex(null) }}
-                      className={`schedule-item draggable-card flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingScheduleIndex === index ? 'dragging-card' : ''} ${dragOverScheduleIndex === index ? 'drag-over-card' : ''}`}
+                      className={`category-card schedule-item draggable-card flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingScheduleIndex === index ? 'dragging-card' : ''} ${dragOverScheduleIndex === index ? 'drag-over-card' : ''}`}
                     >
+                      <span className={`label-chip category-edge-label ${categoryStyle}`}>{item.category}</span>
                       <div className="flex w-14 flex-col items-center pt-1">
                         <div className="text-[11px] font-black text-muted">{item.time}</div>
                         <div className="mt-2 h-8 w-px bg-olive/20" />
@@ -1382,12 +1383,12 @@ function App() {
                             編輯
                           </button>
                         </div>
-                        <span className={`label-chip mt-1 ${categoryStyle}`}>{item.category}</span>
+                        
                         <div className="mt-1 flex items-center gap-2 text-sm text-muted">
                           <span className="text-[#292524]">{item.place}</span>
                           {item.mapUrl && (
-                            <a href={item.mapUrl} target="_blank" rel="noreferrer" className="font-black text-sky-700" aria-label="開啟 Google Maps">
-                              <FontAwesomeIcon icon={faMapLocationDot} />
+                            <a href={item.mapUrl} target="_blank" rel="noreferrer" className="map-link shrink-0 text-sky-700" aria-label="開啟 Google Maps">
+                              <FontAwesomeIcon icon={faLocationDot} />
                             </a>
                           )}
                         </div>
@@ -1551,7 +1552,8 @@ function App() {
                           <div className="h-px flex-1 bg-muted/40" />
                         </div>
                       )}
-                    <div draggable onDragStart={() => setDraggingBookingIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverBookingIndex(visibleIndex) }} onDrop={() => void reorderBookingCards(visibleIndex)} onDragEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} className={`draggable-card cursor-grab active:cursor-grabbing ${bookingMode === 'hotel' ? 'schedule-item mb-4 last:mb-0 flex gap-3 rounded-[22px] p-3' : 'booking-card soft-card mb-3 p-4'} ${isExpired ? 'opacity-45 grayscale' : ''} ${draggingBookingIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverBookingIndex === visibleIndex ? 'drag-over-card' : ''}`}>
+                    <div draggable onDragStart={() => setDraggingBookingIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverBookingIndex(visibleIndex) }} onDrop={() => void reorderBookingCards(visibleIndex)} onDragEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} className={`category-card draggable-card cursor-grab active:cursor-grabbing ${bookingMode === 'hotel' ? 'schedule-item mb-4 last:mb-0 flex gap-3 rounded-[22px] p-3' : 'booking-card soft-card mb-3 p-4'} ${isExpired ? 'opacity-45 grayscale' : ''} ${draggingBookingIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverBookingIndex === visibleIndex ? 'drag-over-card' : ''}`}>
+                      <span className={`label-chip category-edge-label ${bookingMode === 'hotel' ? 'bg-violet-100 text-violet-700' : card.accent}`}>{card.label}</span>
                       {bookingMode === 'hotel' && (
                         <div className="flex w-14 shrink-0 flex-col items-center pt-1 text-center">
                           <div className="mb-1 text-[10px] text-muted" title="拖曳排序">☷</div>
@@ -1563,23 +1565,19 @@ function App() {
                         </div>
                       )}
                       <div className="min-w-0 flex-1">
-                      <div className={bookingMode === 'hotel' ? 'relative min-h-16 pr-20' : 'relative mb-3 min-h-12 pr-20'}>
+                      <div className={bookingMode === 'hotel' ? 'relative pr-10' : 'relative mb-3 min-h-12 pr-10'}>
                         <div className="min-w-0">
                           <div className={bookingMode === 'hotel' ? 'break-words font-black text-ink' : 'min-w-0 text-base font-black text-ink'}>{card.title}</div>
                           {bookingMode === 'hotel' && isExpired && <div className="mt-1 text-xs font-bold text-muted">已過期</div>}
-                          {bookingMode === 'hotel' && <span className="label-chip absolute right-0 top-0 bg-violet-100 text-violet-700">{card.label}</span>}
                           {bookingMode !== 'hotel' && card.startDate && <div className="mt-1 text-xs font-bold text-muted">{formatDateLabel(card.startDate)}{card.endDate ? ` - ${formatDateLabel(card.endDate)}` : ''}</div>}
                           {card.orderNumber && <div className="mt-1 text-xs font-bold text-muted">訂單編號：{card.orderNumber}</div>}
                           {card.purchaser && <div className="mt-1 text-xs font-bold text-muted">訂購人：{card.purchaser}</div>}
                         </div>
-                        {bookingMode !== 'hotel' && <><span className={`absolute right-0 top-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${card.accent}`}>
-                          {card.label}
-                        </span>
-                        <span className="absolute right-0 top-8 text-[10px] font-black text-muted">☷</span></>}
+                        {bookingMode !== 'hotel' && <span className="absolute right-0 top-7 text-[10px] font-black text-muted" title="拖曳排序">☷</span>}
                         <button
                           type="button"
                           onClick={() => openDataEditor({ kind: 'booking', index }, { title: card.title, label: card.label, body: card.body, meta: card.meta, accent: card.accent, actualPickupTime: card.actualPickupTime ?? '', pickupLocation: card.pickupLocation ?? '', pickupMapUrl: card.pickupMapUrl ?? '', returnLocation: card.returnLocation ?? '', returnMapUrl: card.returnMapUrl ?? '', vehicleModel: card.vehicleModel ?? '', checkInTime: card.checkInTime ?? '', checkOutTime: card.checkOutTime ?? '', startDate: card.startDate ?? '', endDate: card.endDate ?? '', orderNumber: card.orderNumber ?? '', purchaser: card.purchaser ?? '', attachmentUrl: card.attachment?.url ?? '', attachmentName: card.attachment?.name ?? '', attachmentType: card.attachment?.type ?? '' })}
-                          className={`absolute right-0 text-[10px] font-black text-olive ${bookingMode === 'hotel' ? 'top-9' : 'top-14 uppercase tracking-[0.14em]'}`}
+                          className={`absolute right-0 text-[10px] font-black text-olive ${bookingMode === 'hotel' ? 'top-0' : 'top-0 uppercase tracking-[0.14em]'}`}
                         >
                           編輯
                         </button>
@@ -1701,7 +1699,7 @@ function App() {
             <section className="mb-5">
               <div className="flex gap-2 overflow-x-auto pb-2">
                 {selectedPark.days.map((day) => (
-                  <button key={day.id} type="button" onClick={() => setSelectedParkDayId(day.id)} className={`min-w-[86px] rounded-[22px] border px-3 py-3 text-left shadow-sm transition active:scale-95 ${selectedParkDay?.id === day.id ? 'border-olive bg-olive text-white' : 'border-white/80 bg-white/80 text-ink'}`}>
+                  <button key={day.id} type="button" onClick={() => setSelectedParkDayId(day.id)} className={`min-w-[86px] rounded-[22px] border px-3 py-3 text-center shadow-sm transition active:scale-95 ${selectedParkDay?.id === day.id ? 'border-olive bg-olive text-white' : 'border-white/80 bg-white/80 text-ink'}`}>
                     <span className="block text-lg font-black">{day.date}</span>
                   </button>
                 ))}
@@ -1734,8 +1732,9 @@ function App() {
                         onDragOver={(event) => { event.preventDefault(); setDragOverRouteIndex(index) }}
                         onDrop={() => void reorderParkRoutes(index)}
                         onDragEnd={() => { setDraggingRouteIndex(null); setDragOverRouteIndex(null) }}
-                        className={`schedule-item draggable-card flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingRouteIndex === index ? 'dragging-card' : ''} ${dragOverRouteIndex === index ? 'drag-over-card' : ''}`}
+                        className={`category-card schedule-item draggable-card flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingRouteIndex === index ? 'dragging-card' : ''} ${dragOverRouteIndex === index ? 'drag-over-card' : ''}`}
                       >
+                      <span className={`label-chip category-edge-label ${colorMap[route.type]}`}>{route.type}</span>
                         <div className="flex w-14 flex-col items-center pt-1">
                           <div className="text-[11px] font-black text-muted">{route.time}</div>
                           <div className="mt-2 h-8 w-px bg-olive/20" />
@@ -1752,7 +1751,7 @@ function App() {
                               編輯
                             </button>
                           </div>
-                          <span className={`label-chip mt-1 ${colorMap[route.type]}`}>{route.type}</span>
+                          
                           <div className="mt-1 flex items-center gap-2 text-sm text-[#292524]">{route.area}</div>
                           <div className="mt-2 text-xs leading-5 text-ink/70">{route.note}</div>
                         </div>

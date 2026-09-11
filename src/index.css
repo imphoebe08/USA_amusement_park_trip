@@ -241,3 +241,21 @@ html[data-theme='dark'] .next-flight {
   background-color: #75455e;
   border-color: #df98b8;
 }
+
+html[data-theme='dark'] .map-link {
+  color: #fff;
+}
+
+
+.category-card {
+  position: relative;
+  padding-top: 1.25rem;
+}
+
+.category-edge-label {
+  position: absolute;
+  top: 0;
+  left: 1rem;
+  transform: translateY(-50%);
+  max-width: calc(100% - 2rem);
+}
