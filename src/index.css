@@ -42,6 +42,8 @@ textarea {
 
 #root {
   min-height: 100vh;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 @layer components {
@@ -96,6 +98,22 @@ textarea {
 
   .schedule-item {
     @apply rounded-[22px] border border-[#dce7ef] bg-[#f6fbff] shadow-sm;
+  }
+
+  .draggable-card {
+    transition: transform 180ms ease, opacity 180ms ease, box-shadow 180ms ease, border-color 180ms ease, background-color 180ms ease;
+    will-change: transform;
+  }
+
+  .dragging-card {
+    transform: scale(0.98) rotate(0.4deg);
+    box-shadow: 0 14px 24px rgba(86, 105, 74, 0.18);
+  }
+
+  .drag-over-card {
+    transform: translateY(5px);
+    border-color: #80b95d !important;
+    box-shadow: 0 0 0 3px rgba(128, 185, 93, 0.2);
   }
 
   .weather-card {

@@ -38,6 +38,7 @@ type FlightInfo = {
   aircraft: string
   price: string
   confirmationCode: string
+  purchaser?: string
 }
 
 type DayPlan = {
@@ -96,8 +97,18 @@ type TripData = {
     body: string
     meta: string
     accent: string
+    actualPickupTime?: string
+    pickupLocation?: string
+    pickupMapUrl?: string
+    returnLocation?: string
+    returnMapUrl?: string
+    vehicleModel?: string
+    checkInTime?: string
+    checkOutTime?: string
     startDate?: string
     endDate?: string
+    orderNumber?: string
+    purchaser?: string
     attachment?: { url: string; name: string; type: string }
   }[]
   expenseEntries: {
@@ -110,6 +121,7 @@ type TripData = {
     title: string
     assignee: string
     done: boolean
+    mode?: string
   }[]
   members: {
     name: string
@@ -181,6 +193,22 @@ const isPastFlight = (flight: FlightInfo) => {
   const dateValue = toDateInputValue(flight.date)
   if (!dateValue) return false
   return new Date(`${dateValue}T23:59:59`).getTime() < Date.now()
+}
+
+const getBookingDate = (card: TripData['bookingCards'][number]) => card.startDate || ''
+
+const isPastBooking = (card: TripData['bookingCards'][number]) => {
+  const date = card.endDate || card.startDate || ''
+  return card.label === 'Hotel' && Boolean(date) && new Date(`${date}T23:59:59`).getTime() < Date.now()
+}
+
+const compareBookingCards = (first: TripData['bookingCards'][number], second: TripData['bookingCards'][number], direction: 'asc' | 'desc') => {
+  const firstDate = getBookingDate(first)
+  const secondDate = getBookingDate(second)
+  if (!firstDate && !secondDate) return 0
+  if (!firstDate) return 1
+  if (!secondDate) return -1
+  return direction === 'asc' ? firstDate.localeCompare(secondDate) : secondDate.localeCompare(firstDate)
 }
 
 type WeatherSummary = { location: string; description: string; temperature: string }
@@ -429,8 +457,8 @@ const localTripData: TripData = {
   ],
   bookingCards: [
     { title: '機票', label: 'Flight', body: 'Orlando Airport', meta: '出發 08:40 · 2h 30m', accent: 'bg-emerald-100 text-emerald-700' },
-    { title: '住宿', label: 'Hotel', body: 'Disney Resort Hotel', meta: 'Check-in 15:00 · Check-out 11:00', accent: 'bg-amber-100 text-amber-700' },
-    { title: '租車', label: 'Car', body: 'SUV Rental', meta: '取車 08:00 · 還車 19:00', accent: 'bg-sky-100 text-sky-700' },
+    { title: '住宿', label: 'Hotel', body: 'Disney Resort Hotel', meta: 'Check-in 15:00 · Check-out 11:00', accent: 'bg-amber-100 text-amber-700', startDate: '', endDate: '', orderNumber: '', purchaser: '' },
+    { title: '租車', label: 'Car', body: 'SUV Rental', meta: '取車 08:00 · 還車 19:00', accent: 'bg-sky-100 text-sky-700', purchaser: '' },
   ],
   expenseEntries: [
     { date: '7/13', item: '迪士尼門票', amount: 'NT$ 3,200', payer: 'Ava' },
@@ -438,9 +466,9 @@ const localTripData: TripData = {
     { date: '7/14', item: '租車', amount: 'USD 96', payer: 'Nia' },
   ],
   planningTasks: [
-    { title: '確認行李清單', assignee: '全體', done: true },
-    { title: '購買防曬用品', assignee: 'Ava', done: false },
-    { title: '確認景點時間表', assignee: 'Milo', done: false },
+    { title: '確認行李清單', assignee: '全體', done: true, mode: '待辦' },
+    { title: '購買防曬用品', assignee: 'Ava', done: false, mode: '採購' },
+    { title: '確認景點時間表', assignee: 'Milo', done: false, mode: '想去' },
   ],
   members: [
     { name: 'Ava', role: '總規劃', color: 'bg-rose-200 text-rose-700' },
@@ -517,6 +545,7 @@ const normalizeTripData = (value: Partial<TripData> | null | undefined): TripDat
     ? value.flightInfo.map((flight) => ({
         ...flight,
         confirmationCode: flight.confirmationCode || (flight as FlightInfo & { purchased?: string }).purchased || '',
+        purchaser: flight.purchaser || '',
       }))
     : localTripData.flightInfo,
   tripSettings: value?.tripSettings ?? localTripData.tripSettings,
@@ -526,10 +555,12 @@ const normalizeTripData = (value: Partial<TripData> | null | undefined): TripDat
         ...card,
         startDate: card.startDate || '',
         endDate: card.endDate || '',
+        orderNumber: card.orderNumber || '',
+        purchaser: card.purchaser || '',
       }))
     : localTripData.bookingCards,
   expenseEntries: Array.isArray(value?.expenseEntries) ? (value.expenseEntries as TripData['expenseEntries']) : localTripData.expenseEntries,
-  planningTasks: Array.isArray(value?.planningTasks) ? (value.planningTasks as TripData['planningTasks']) : localTripData.planningTasks,
+  planningTasks: Array.isArray(value?.planningTasks) ? (value.planningTasks as TripData['planningTasks']).map((task) => ({ ...task, mode: task.mode || '待辦' })) : localTripData.planningTasks,
   members: Array.isArray(value?.members) ? (value.members as TripData['members']) : localTripData.members,
   parkSections: Array.isArray(value?.parkSections) ? (value.parkSections as ParkSection[]) : localTripData.parkSections,
 })
@@ -611,6 +642,15 @@ function App() {
   const [isSaving, setIsSaving] = useState(false)
   const [draggingScheduleIndex, setDraggingScheduleIndex] = useState<number | null>(null)
   const [draggingRouteIndex, setDraggingRouteIndex] = useState<number | null>(null)
+  const [draggingBookingIndex, setDraggingBookingIndex] = useState<number | null>(null)
+  const [draggingFlightIndex, setDraggingFlightIndex] = useState<number | null>(null)
+  const [draggingTaskIndex, setDraggingTaskIndex] = useState<number | null>(null)
+  const [dragOverScheduleIndex, setDragOverScheduleIndex] = useState<number | null>(null)
+  const [dragOverRouteIndex, setDragOverRouteIndex] = useState<number | null>(null)
+  const [dragOverBookingIndex, setDragOverBookingIndex] = useState<number | null>(null)
+  const [dragOverFlightIndex, setDragOverFlightIndex] = useState<number | null>(null)
+  const [dragOverTaskIndex, setDragOverTaskIndex] = useState<number | null>(null)
+  const [bookingSortDirection, setBookingSortDirection] = useState<'asc' | 'desc'>('asc')
 
   useEffect(() => {
     let isCancelled = false
@@ -707,6 +747,16 @@ function App() {
   const selectedParkDay = selectedPark.days.find((day) => day.id === selectedParkDayId) ?? selectedPark.days[0]
 
   const bookingCards = tripData.bookingCards
+  const sortedFlights = [...tripData.flightInfo].sort((first, second) => Number(isPastFlight(first)) - Number(isPastFlight(second)))
+  const visibleBookingCards = bookingCards
+    .filter((card) => bookingMode === 'hotel' ? card.label === 'Hotel' : bookingMode === 'car' ? card.label === 'Car' : bookingMode === 'voucher' ? card.label === 'Voucher' : false)
+    .sort((first, second) => {
+      if (bookingMode !== 'hotel') return 0
+      const firstPast = isPastBooking(first)
+      const secondPast = isPastBooking(second)
+      if (firstPast !== secondPast) return Number(firstPast) - Number(secondPast)
+      return compareBookingCards(first, second, bookingSortDirection)
+    })
   const flightInfo = tripData.flightInfo[expandedFlightIndex ?? 0] ?? localTripData.flightInfo[0]
   const tripSettings = tripData.tripSettings
   const countdown = getFlightCountdown(tripData.flightInfo)
@@ -851,7 +901,7 @@ function App() {
         departureAirport: dataDraft.departureAirport || '', departureTime: dataDraft.departureTime || '',
         arrivalAirport: dataDraft.arrivalAirport || '', arrivalTime: dataDraft.arrivalTime || '',
         date: dataDraft.date || '', baggage: dataDraft.baggage || '', aircraft: dataDraft.aircraft || '',
-        price: dataDraft.price || '', confirmationCode: dataDraft.confirmationCode || '',
+        price: dataDraft.price || '', confirmationCode: dataDraft.confirmationCode || '', purchaser: dataDraft.purchaser || '',
       }
       const flightInfo = [...tripData.flightInfo]
       if (dataEditor.index === null) flightInfo.push(item)
@@ -871,14 +921,41 @@ function App() {
     }
 
     if (dataEditor.kind === 'booking') {
-        const item = {
+      if (dataDraft.startDate && dataDraft.endDate && dataDraft.endDate < dataDraft.startDate) {
+        setErrorMessage(dataDraft.label === 'Car' ? '歸還日期不可早於租車日期。' : '結束日期不可早於開始日期。')
+        return
+      }
+      if (dataDraft.label === 'Car') {
+        for (const key of ['pickupMapUrl', 'returnMapUrl']) {
+          const value = dataDraft[key]?.trim()
+          if (!value) continue
+          try {
+            const url = new URL(value)
+            if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Invalid protocol')
+          } catch {
+            setErrorMessage('請填入完整的地圖網址（以 https:// 或 http:// 開頭）。')
+            return
+          }
+        }
+      }
+      const item = {
         title: dataDraft.title.trim(),
         label: dataDraft.label || 'Info',
         body: dataDraft.body || '',
         meta: dataDraft.meta || '',
         accent: dataDraft.accent || 'bg-emerald-100 text-emerald-700',
-          startDate: dataDraft.startDate || '',
-          endDate: dataDraft.endDate || '',
+        actualPickupTime: dataDraft.actualPickupTime || '',
+        pickupLocation: dataDraft.pickupLocation || '',
+        pickupMapUrl: dataDraft.pickupMapUrl?.trim() || '',
+        returnLocation: dataDraft.returnLocation || '',
+        returnMapUrl: dataDraft.returnMapUrl?.trim() || '',
+        vehicleModel: dataDraft.vehicleModel || '',
+        checkInTime: dataDraft.checkInTime || '',
+        checkOutTime: dataDraft.checkOutTime || '',
+        startDate: dataDraft.startDate || '',
+        endDate: dataDraft.endDate || '',
+        orderNumber: dataDraft.orderNumber || '',
+        purchaser: dataDraft.purchaser || '',
         ...(dataDraft.attachmentUrl ? {
           attachment: {
             url: dataDraft.attachmentUrl,
@@ -907,7 +984,7 @@ function App() {
     }
 
     if (dataEditor.kind === 'task') {
-      const item = { title: dataDraft.title.trim(), assignee: dataDraft.assignee || '全體', done: dataDraft.done === 'true' }
+      const item = { title: dataDraft.title.trim(), assignee: dataDraft.assignee || '全體', done: dataDraft.done === 'true', mode: dataDraft.mode || preparationMode }
       const planningTasks = [...tripData.planningTasks]
       if (dataEditor.index === null) planningTasks.push(item)
       else planningTasks[dataEditor.index] = item
@@ -1033,6 +1110,7 @@ function App() {
     })
     const nextTripData = { ...tripData, dayPlans: nextDayPlans }
     setDraggingScheduleIndex(null)
+    setDragOverScheduleIndex(null)
     try {
       await saveTripDataToFirebase(nextTripData)
       setTripData(nextTripData)
@@ -1060,6 +1138,7 @@ function App() {
     })
     const nextTripData = { ...tripData, parkSections }
     setDraggingRouteIndex(null)
+    setDragOverRouteIndex(null)
     try {
       await saveTripDataToFirebase(nextTripData)
       setTripData(nextTripData)
@@ -1067,6 +1146,77 @@ function App() {
     } catch (error) {
       console.error('Failed to reorder park routes:', error)
       setErrorMessage(getFirebaseErrorMessage(error, '樂園路線排序儲存失敗'))
+    }
+  }
+
+  const reorderBookingCards = async (targetIndex: number) => {
+    if (draggingBookingIndex === null || draggingBookingIndex === targetIndex) return
+    const visibleCards = visibleBookingCards
+    const sourceCard = visibleCards[draggingBookingIndex]
+    const targetCard = visibleCards[targetIndex]
+    if (!sourceCard || !targetCard) return
+    const sourceIndex = bookingCards.indexOf(sourceCard)
+    const targetOriginalIndex = bookingCards.indexOf(targetCard)
+    const nextCards = [...bookingCards]
+    nextCards.splice(sourceIndex, 1)
+    nextCards.splice(sourceIndex < targetOriginalIndex ? targetOriginalIndex - 1 : targetOriginalIndex, 0, sourceCard)
+    const nextTripData = { ...tripData, bookingCards: nextCards }
+    setDraggingBookingIndex(null)
+    setDragOverBookingIndex(null)
+    try {
+      await saveTripDataToFirebase(nextTripData)
+      setTripData(nextTripData)
+      setErrorMessage(null)
+    } catch (error) {
+      console.error('Failed to reorder booking cards:', error)
+      setErrorMessage(getFirebaseErrorMessage(error, '預訂排序儲存失敗'))
+    }
+  }
+
+  const reorderFlights = async (targetIndex: number) => {
+    if (draggingFlightIndex === null || draggingFlightIndex === targetIndex) return
+    const sourceFlight = sortedFlights[draggingFlightIndex]
+    const targetFlight = sortedFlights[targetIndex]
+    if (!sourceFlight || !targetFlight) return
+    const sourceIndex = tripData.flightInfo.indexOf(sourceFlight)
+    const targetOriginalIndex = tripData.flightInfo.indexOf(targetFlight)
+    const nextFlights = [...tripData.flightInfo]
+    nextFlights.splice(sourceIndex, 1)
+    nextFlights.splice(sourceIndex < targetOriginalIndex ? targetOriginalIndex - 1 : targetOriginalIndex, 0, sourceFlight)
+    const nextTripData = { ...tripData, flightInfo: nextFlights }
+    setDraggingFlightIndex(null)
+    setDragOverFlightIndex(null)
+    try {
+      await saveTripDataToFirebase(nextTripData)
+      setTripData(nextTripData)
+      setErrorMessage(null)
+    } catch (error) {
+      console.error('Failed to reorder flights:', error)
+      setErrorMessage(getFirebaseErrorMessage(error, '機票排序儲存失敗'))
+    }
+  }
+
+  const reorderPlanningTasks = async (targetIndex: number) => {
+    if (draggingTaskIndex === null || draggingTaskIndex === targetIndex) return
+    const visibleTasks = planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationAssignee === '全體' || task.assignee === preparationAssignee))
+    const sourceTask = visibleTasks[draggingTaskIndex]
+    const targetTask = visibleTasks[targetIndex]
+    if (!sourceTask || !targetTask) return
+    const sourceIndex = planningTasks.indexOf(sourceTask)
+    const targetOriginalIndex = planningTasks.indexOf(targetTask)
+    const nextTasks = [...planningTasks]
+    nextTasks.splice(sourceIndex, 1)
+    nextTasks.splice(sourceIndex < targetOriginalIndex ? targetOriginalIndex - 1 : targetOriginalIndex, 0, sourceTask)
+    const nextTripData = { ...tripData, planningTasks: nextTasks }
+    setDraggingTaskIndex(null)
+    setDragOverTaskIndex(null)
+    try {
+      await saveTripDataToFirebase(nextTripData)
+      setTripData(nextTripData)
+      setErrorMessage(null)
+    } catch (error) {
+      console.error('Failed to reorder preparation tasks:', error)
+      setErrorMessage(getFirebaseErrorMessage(error, '準備項目排序儲存失敗'))
     }
   }
 
@@ -1163,13 +1313,12 @@ function App() {
                       key={`${item.time}-${item.title}`}
                       draggable
                       onDragStart={() => setDraggingScheduleIndex(index)}
-                      onDragOver={(event) => event.preventDefault()}
+                      onDragOver={(event) => { event.preventDefault(); setDragOverScheduleIndex(index) }}
                       onDrop={() => void reorderScheduleItems(index)}
-                      onDragEnd={() => setDraggingScheduleIndex(null)}
-                      className={`schedule-item flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingScheduleIndex === index ? 'opacity-50' : ''}`}
+                      onDragEnd={() => { setDraggingScheduleIndex(null); setDragOverScheduleIndex(null) }}
+                      className={`schedule-item draggable-card flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingScheduleIndex === index ? 'dragging-card' : ''} ${dragOverScheduleIndex === index ? 'drag-over-card' : ''}`}
                     >
                       <div className="flex w-14 flex-col items-center pt-1">
-                        <div className="mb-1 text-[10px] text-muted" title="拖曳排序">☷</div>
                         <div className="text-[11px] font-black text-muted">{item.time}</div>
                         <div className="mt-2 h-8 w-px bg-olive/20" />
                       </div>
@@ -1233,8 +1382,10 @@ function App() {
                 </button>
               </div>
               <div className="space-y-2">
-                {tripData.flightInfo.map((flight, index) => (
-                  <div key={`${flight.flightNumber}-${flight.date}`}>
+                {sortedFlights.map((flight) => {
+                  const index = tripData.flightInfo.indexOf(flight)
+                  return (
+                  <div key={`${flight.flightNumber}-${flight.date}`} draggable onDragStart={() => setDraggingFlightIndex(sortedFlights.indexOf(flight))} onDragOver={(event) => { event.preventDefault(); setDragOverFlightIndex(sortedFlights.indexOf(flight)) }} onDrop={() => void reorderFlights(sortedFlights.indexOf(flight))} onDragEnd={() => { setDraggingFlightIndex(null); setDragOverFlightIndex(null) }} className={`draggable-card rounded-[20px] ${draggingFlightIndex === sortedFlights.indexOf(flight) ? 'dragging-card' : ''} ${dragOverFlightIndex === sortedFlights.indexOf(flight) ? 'drag-over-card' : ''}`}>
                     <button
                       type="button"
                       onClick={() => setExpandedFlightIndex(expandedFlightIndex === index ? null : index)}
@@ -1245,12 +1396,12 @@ function App() {
                         <div className="flex min-w-0 flex-1 items-end justify-center gap-2">
                           <div className="min-w-0 text-center">
                             <div className="text-[10px] font-bold text-muted">{flight.departureTime || '--'}</div>
-                            <div className={`truncate text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-ink'}`}>{flight.departureAirport || '--'}</div>
+                            <div className={`min-w-0 text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-ink'}`}>{flight.departureAirport || '--'}</div>
                           </div>
                           <span className="pb-0.5 text-xs text-muted">→</span>
                           <div className="min-w-0 text-center">
                             <div className="text-[10px] font-bold text-muted">{flight.arrivalTime || '--'}</div>
-                            <div className={`truncate text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-ink'}`}>{flight.arrivalAirport || '--'}</div>
+                            <div className={`min-w-0 text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-ink'}`}>{flight.arrivalAirport || '--'}</div>
                           </div>
                         </div>
                         <div className={`w-14 shrink-0 text-right text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-olive'}`}>{flight.flightNumber || '--'}</div>
@@ -1261,6 +1412,7 @@ function App() {
               <section className="overflow-hidden rounded-[30px] border border-white/80 bg-white shadow-soft">
                 <div className="bg-[#E9F0FF] px-5 pb-5 pt-4 text-center">
                   <div className="text-sm font-black tracking-[0.18em] text-[#8D8478]">{flightInfo.airline}</div>
+                  {flightInfo.purchaser && <div className="mt-1 text-xs font-bold text-[#8D8478]">訂購人：{flightInfo.purchaser}</div>}
                   <div className="mt-3 rounded-[22px] bg-white/80 px-5 py-2 text-5xl font-black tracking-[0.08em] text-[#725B4A] shadow-sm">
                     {flightInfo.flightNumber}
                   </div>
@@ -1312,53 +1464,102 @@ function App() {
               </section>
                     )}
                   </div>
-                ))}
+                  )
+                })}
               </div>
               </>
             )}
 
             {bookingMode !== 'flight' && (
-              <section>
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-base font-black">{bookingMode === 'hotel' ? '住宿資訊' : bookingMode === 'car' ? '租車資訊' : '其他預訂'}</h3>
+              <section className={bookingMode === 'hotel' ? 'soft-card p-4' : undefined}>
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <h3 className="text-lg font-black tracking-[-0.02em]">{bookingMode === 'hotel' ? '住宿資訊' : bookingMode === 'car' ? '租車資訊' : '其他預訂'}</h3>
                   <button
                     type="button"
-                    onClick={() => openDataEditor({ kind: 'booking', index: null }, { title: '', label: bookingMode === 'hotel' ? 'Hotel' : bookingMode === 'car' ? 'Car' : 'Voucher' })}
-                    className="rounded-full bg-olive px-3 py-1.5 text-xs font-black text-white"
+                    onClick={() => openDataEditor({ kind: 'booking', index: null }, { title: '', label: bookingMode === 'hotel' ? 'Hotel' : bookingMode === 'car' ? 'Car' : 'Voucher', purchaser: '' })}
+                    className="shrink-0 rounded-full bg-olive px-3 py-1.5 text-[10px] font-black text-white active:scale-95"
                   >
                     + 新增
                   </button>
                 </div>
-                {bookingCards
-                  .filter((card) => (bookingMode === 'hotel' ? card.label === 'Hotel' : bookingMode === 'car' ? card.label === 'Car' : true))
-                  .map((card) => {
+                {bookingMode === 'hotel' && (
+                  <div className="mb-3 flex justify-end">
+                    <select value={bookingSortDirection} onChange={(event) => setBookingSortDirection(event.target.value as 'asc' | 'desc')} className="form-field mt-0 w-auto text-xs">
+                      <option value="asc">日期遞增</option>
+                      <option value="desc">日期遞減</option>
+                    </select>
+                  </div>
+                )}
+                {visibleBookingCards.map((card, visibleIndex) => {
                     const index = bookingCards.indexOf(card)
+                    const isExpired = isPastBooking(card)
                     return (
-                    <div key={`${card.title}-${card.startDate}`} className="soft-card mb-3 p-4">
-                      <div className="mb-3 flex items-center justify-between">
-                        <div className="min-w-0">
-                          <div className="truncate text-base font-black text-ink">{card.title}</div>
-                          {card.startDate && <div className="mt-1 text-xs font-bold text-muted">{formatDateLabel(card.startDate)}{card.endDate ? ` - ${formatDateLabel(card.endDate)}` : ''}</div>}
+                    <div key={`${card.title}-${card.startDate}`} draggable onDragStart={() => setDraggingBookingIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverBookingIndex(visibleIndex) }} onDrop={() => void reorderBookingCards(visibleIndex)} onDragEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} className={`draggable-card cursor-grab active:cursor-grabbing ${bookingMode === 'hotel' ? 'schedule-item mb-4 last:mb-0 flex gap-3 rounded-[22px] p-3' : 'booking-card soft-card mb-3 p-4'} ${isExpired ? 'opacity-45 grayscale' : ''} ${draggingBookingIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverBookingIndex === visibleIndex ? 'drag-over-card' : ''}`}>
+                      {bookingMode === 'hotel' && (
+                        <div className="flex w-14 shrink-0 flex-col items-center pt-1 text-center">
+                          <div className="mb-1 text-[10px] text-muted" title="拖曳排序">☷</div>
+                          <div className="text-[9px] text-muted">入住</div>
+                          <div className="text-[11px] font-black text-muted">{card.startDate ? formatDateLabel(card.startDate) : '未設定'}</div>
+                          <div className="my-2 h-8 w-px bg-olive/20" />
+                          <div className="text-[9px] text-muted">退房</div>
+                          <div className="text-[11px] font-black text-muted">{card.endDate ? formatDateLabel(card.endDate) : '未設定'}</div>
                         </div>
-                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${card.accent}`}>
+                      )}
+                      <div className="min-w-0 flex-1">
+                      <div className={bookingMode === 'hotel' ? 'relative min-h-16 pr-20' : 'relative mb-3 min-h-12 pr-20'}>
+                        <div className="min-w-0">
+                          <div className={bookingMode === 'hotel' ? 'break-words font-black text-ink' : 'min-w-0 text-base font-black text-ink'}>{card.title}</div>
+                          {bookingMode === 'hotel' && <span className="label-chip absolute right-0 top-0 bg-violet-100 text-violet-700">{card.label}</span>}
+                          {bookingMode !== 'hotel' && card.startDate && <div className="mt-1 text-xs font-bold text-muted">{formatDateLabel(card.startDate)}{card.endDate ? ` - ${formatDateLabel(card.endDate)}` : ''}</div>}
+                          {card.orderNumber && <div className="mt-1 text-xs font-bold text-muted">訂單編號：{card.orderNumber}</div>}
+                          {card.purchaser && <div className="mt-1 text-xs font-bold text-muted">訂購人：{card.purchaser}</div>}
+                        </div>
+                        {bookingMode !== 'hotel' && <><span className={`absolute right-0 top-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${card.accent}`}>
                           {card.label}
                         </span>
+                        <span className="absolute right-0 top-8 text-[10px] font-black text-muted">☷</span></>}
                         <button
                           type="button"
-                          onClick={() => openDataEditor({ kind: 'booking', index }, { title: card.title, label: card.label, body: card.body, meta: card.meta, accent: card.accent, startDate: card.startDate ?? '', endDate: card.endDate ?? '', attachmentUrl: card.attachment?.url ?? '', attachmentName: card.attachment?.name ?? '', attachmentType: card.attachment?.type ?? '' })}
-                          className="text-[10px] font-black uppercase tracking-[0.14em] text-olive"
+                          onClick={() => openDataEditor({ kind: 'booking', index }, { title: card.title, label: card.label, body: card.body, meta: card.meta, accent: card.accent, actualPickupTime: card.actualPickupTime ?? '', pickupLocation: card.pickupLocation ?? '', pickupMapUrl: card.pickupMapUrl ?? '', returnLocation: card.returnLocation ?? '', returnMapUrl: card.returnMapUrl ?? '', vehicleModel: card.vehicleModel ?? '', checkInTime: card.checkInTime ?? '', checkOutTime: card.checkOutTime ?? '', startDate: card.startDate ?? '', endDate: card.endDate ?? '', orderNumber: card.orderNumber ?? '', purchaser: card.purchaser ?? '', attachmentUrl: card.attachment?.url ?? '', attachmentName: card.attachment?.name ?? '', attachmentType: card.attachment?.type ?? '' })}
+                          className={`absolute right-0 text-[10px] font-black text-olive ${bookingMode === 'hotel' ? 'top-9' : 'top-14 uppercase tracking-[0.14em]'}`}
                         >
                           編輯
                         </button>
                       </div>
-                      <div className="mt-3 text-lg font-black tracking-[-0.03em] text-ink">{card.body}</div>
-                      <div className="mt-1 text-sm text-muted">{card.meta}</div>
+                      <div className={bookingMode === 'hotel' ? 'mt-1 break-words text-sm text-muted' : 'mt-3 text-lg font-black tracking-[-0.03em] text-ink'}>{card.body}</div>
+                      {bookingMode === 'hotel' && (card.checkInTime || card.checkOutTime) && (
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+                          {card.checkInTime && <span>Check-in：{card.checkInTime}</span>}
+                          {card.checkOutTime && <span>Check-out：{card.checkOutTime}</span>}
+                        </div>
+                      )}
+                      {bookingMode === 'car' && (
+                        <div className="mt-3 space-y-2 text-sm text-muted">
+                          <div>租車日期：{card.startDate || '未設定'}</div>
+                          <div>歸還日期：{card.endDate || '未設定'}</div>
+                          <div>租用車型：{card.vehicleModel || '未填寫'}</div>
+                          {[
+                            { label: '租車地點', name: card.pickupLocation, url: card.pickupMapUrl },
+                            { label: '還車地點', name: card.returnLocation, url: card.returnMapUrl },
+                          ].map((location) => (
+                            <div key={location.label} className="flex flex-wrap items-center gap-2">
+                              <span className="break-words">{location.label}：{location.name || '未填寫'}</span>
+                              {location.url && /^https?:\/\//i.test(location.url) && <a href={location.url} target="_blank" rel="noreferrer" className="text-xs font-black text-sky-700">開啟 Google Maps</a>}
+                            </div>
+                          ))}
+                          <div className="rounded-2xl bg-olive/5 p-3 text-xs">
+                            實際取車時間（當地時間）：{card.actualPickupTime ? card.actualPickupTime.replace('T', ' ') : '尚未填寫，可由編輯補上'}
+                          </div>
+                        </div>
+                      )}
+                      <div className={bookingMode === 'hotel' ? 'mt-2 break-words text-xs leading-5 text-ink/70' : 'mt-1 text-sm text-muted'}>{card.meta}</div>
                       {card.attachment && (
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button type="button" onClick={() => setPreviewAttachment(card.attachment!)} className="rounded-full bg-sky-100 px-3 py-1.5 text-xs font-black text-sky-700">預覽憑證</button>
                           <a href={card.attachment.url} download={card.attachment.name} target="_blank" rel="noreferrer" className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-700">下載</a>
                         </div>
                       )}
+                      </div>
                     </div>
                     )
                   })}
@@ -1445,35 +1646,33 @@ function App() {
               <h2 className="mt-1 text-lg font-black tracking-[-0.02em]">{selectedPark.description}</h2>
             </section>
 
-            <section className="soft-card section-park p-2.5">
-              <div className="flex gap-2 overflow-x-auto">
+            <section className="mb-5">
+              <div className="flex gap-2 overflow-x-auto pb-2">
                 {selectedPark.days.map((day) => (
-                  <button key={day.id} type="button" onClick={() => setSelectedParkDayId(day.id)} className={`min-w-[92px] rounded-[18px] px-3 py-2 text-center text-xs font-black ${selectedParkDay?.id === day.id ? 'bg-violet-700 text-white' : 'bg-white text-muted'}`}>
-                    <span className="block text-[11px] font-black">{day.date}</span>
+                  <button key={day.id} type="button" onClick={() => setSelectedParkDayId(day.id)} className={`min-w-[86px] rounded-[22px] border px-3 py-3 text-left shadow-sm transition active:scale-95 ${selectedParkDay?.id === day.id ? 'border-olive bg-olive text-white' : 'border-white/80 bg-white/80 text-ink'}`}>
+                    <span className="block text-lg font-black">{day.date}</span>
                   </button>
                 ))}
               </div>
             </section>
 
             {selectedParkDay && (
-              <section key={selectedParkDay.id} className="soft-card section-park p-4">
-                <div className="mb-3">
+              <section key={selectedParkDay.id} className="soft-card p-4">
+                <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-[9px] uppercase tracking-[0.14em] text-muted">Title</p>
-                    <button type="button" onClick={() => openDataEditor({ kind: 'parkDay', index: 0, parkId: selectedPark.id, dayId: selectedParkDay.id }, { title: selectedParkDay.name })} className="mt-1 text-left text-base font-black text-ink">{selectedParkDay.name}</button>
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{selectedParkDay.date}</p>
+                    <button type="button" onClick={() => openDataEditor({ kind: 'parkDay', index: 0, parkId: selectedPark.id, dayId: selectedParkDay.id }, { title: selectedParkDay.name })} className="mt-1 text-left text-lg font-black tracking-[-0.02em] text-ink">{selectedParkDay.name}</button>
                   </div>
-                  <div className="mt-3 flex justify-end">
                   <button
                     type="button"
                     onClick={() => openDataEditor({ kind: 'route', index: null, parkId: selectedPark.id, dayId: selectedParkDay.id }, { type: '景點' })}
-                    className="rounded-full bg-olive px-2.5 py-1.5 text-[9px] font-black text-white"
+                    className="shrink-0 rounded-full bg-olive px-3 py-1.5 text-[10px] font-black text-white active:scale-95"
                   >
-                    + 路線
+                    + 新增
                   </button>
-                  </div>
                 </div>
 
-                <div className="space-y-3">
+                <div className="space-y-4">
                   {selectedParkDay.routes.map((route, index) => {
                     const colorMap = {
                       景點: 'bg-emerald-100 text-emerald-700',
@@ -1487,27 +1686,31 @@ function App() {
                         key={`${selectedParkDay.id}-${route.time}-${route.title}`}
                         draggable
                         onDragStart={() => setDraggingRouteIndex(index)}
-                        onDragOver={(event) => event.preventDefault()}
+                        onDragOver={(event) => { event.preventDefault(); setDragOverRouteIndex(index) }}
                         onDrop={() => void reorderParkRoutes(index)}
-                        onDragEnd={() => setDraggingRouteIndex(null)}
-                        className={`park-route-item cursor-grab rounded-[20px] bg-transparent p-3 active:cursor-grabbing ${draggingRouteIndex === index ? 'opacity-50' : ''}`}
+                        onDragEnd={() => { setDraggingRouteIndex(null); setDragOverRouteIndex(null) }}
+                        className={`schedule-item draggable-card flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingRouteIndex === index ? 'dragging-card' : ''} ${dragOverRouteIndex === index ? 'drag-over-card' : ''}`}
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2"><span className="text-sm text-muted" title="拖曳排序">☷</span><div className="text-[11px] font-black text-muted">{route.time}</div></div>
-                          <span className={`label-chip ${colorMap[route.type]}`}>{route.type}</span>
+                        <div className="flex w-14 flex-col items-center pt-1">
+                          <div className="text-[11px] font-black text-muted">{route.time}</div>
+                          <div className="mt-2 h-8 w-px bg-olive/20" />
                         </div>
-                        <div className="mt-2 flex items-center justify-between gap-2">
-                          <div className="font-black text-ink">{route.title}</div>
-                          <button
-                            type="button"
-                            onClick={() => openDataEditor({ kind: 'route', index, parkId: selectedPark.id, dayId: selectedParkDay.id }, { time: route.time, title: route.title, area: route.area, type: route.type, note: route.note })}
-                            className="text-[10px] font-black text-olive"
-                          >
-                            編輯
-                          </button>
+
+                        <div className="flex-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-black text-ink">{route.title}</div>
+                            <button
+                              type="button"
+                              onClick={() => openDataEditor({ kind: 'route', index, parkId: selectedPark.id, dayId: selectedParkDay.id }, { time: route.time, title: route.title, area: route.area, type: route.type, note: route.note })}
+                              className="shrink-0 text-[10px] font-black text-olive"
+                            >
+                              編輯
+                            </button>
+                          </div>
+                          <span className={`label-chip mt-1 ${colorMap[route.type]}`}>{route.type}</span>
+                          <div className="mt-1 flex items-center gap-2 text-sm text-muted">{route.area}</div>
+                          <div className="mt-2 text-xs leading-5 text-ink/70">{route.note}</div>
                         </div>
-                        <div className="mt-1 text-sm text-muted">{route.area}</div>
-                        <div className="mt-2 text-xs leading-5 text-ink/70">{route.note}</div>
                       </div>
                     )
                   })}
@@ -1548,16 +1751,16 @@ function App() {
                 <div className="flex-1 rounded-2xl border border-[#DCE4D2] bg-transparent px-3 py-3 text-sm font-bold text-[#B8AD99]">
                   新增{preparationMode}（全體）…
                 </div>
-                <button type="button" onClick={() => openDataEditor({ kind: 'task', index: null }, { title: '', assignee: preparationAssignee, done: 'false' })} className="flex h-12 w-12 items-center justify-center rounded-2xl bg-olive text-xl text-white shadow-sm" aria-label="新增待辦">
+                <button type="button" onClick={() => openDataEditor({ kind: 'task', index: null }, { title: '', assignee: preparationAssignee, done: 'false', mode: preparationMode })} className="flex h-12 w-12 items-center justify-center rounded-2xl bg-olive text-xl text-white shadow-sm" aria-label="新增待辦">
                   <FontAwesomeIcon icon={faPlus} />
                 </button>
               </div>
             </section>
 
-            {preparationMode === '待辦' && planningTasks.filter((task) => preparationAssignee === '全體' || task.assignee === preparationAssignee).map((task) => {
+            {planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationAssignee === '全體' || task.assignee === preparationAssignee)).map((task, visibleIndex) => {
               const index = planningTasks.indexOf(task)
               return (
-                <section key={task.title} className="todo-card p-4">
+                <section key={task.title} draggable onDragStart={() => setDraggingTaskIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverTaskIndex(visibleIndex) }} onDrop={() => void reorderPlanningTasks(visibleIndex)} onDragEnd={() => { setDraggingTaskIndex(null); setDragOverTaskIndex(null) }} className={`todo-card draggable-card cursor-grab p-4 ${draggingTaskIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverTaskIndex === visibleIndex ? 'drag-over-card' : ''}`}>
                   <div className="mb-2 flex items-center gap-2 text-[10px] font-black text-[#9B907E]">
                     <span className="rounded-md bg-[#E5EBD8] px-2 py-1">{task.assignee}</span>
                   </div>
@@ -1566,7 +1769,7 @@ function App() {
                       {task.done ? '✓' : ''}
                     </button>
                     <div className={`flex-1 text-lg font-black ${task.done ? 'text-ink/40 line-through' : 'text-ink'}`}>{task.title}</div>
-                    <button type="button" onClick={() => openDataEditor({ kind: 'task', index }, { title: task.title, assignee: task.assignee, done: String(task.done) })} className="text-lg text-[#B8AD99]" aria-label="編輯待辦">
+                    <button type="button" onClick={() => openDataEditor({ kind: 'task', index }, { title: task.title, assignee: task.assignee, done: String(task.done), mode: task.mode || preparationMode })} className="text-lg text-[#B8AD99]" aria-label="編輯待辦">
                       <FontAwesomeIcon icon={faPen} />
                     </button>
                   </div>
@@ -1574,7 +1777,7 @@ function App() {
               )
             })}
 
-            {preparationMode !== '待辦' && (
+            {planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationAssignee === '全體' || task.assignee === preparationAssignee)).length === 0 && (
               <section className="todo-empty p-5 text-center text-sm font-bold text-muted">
                 目前尚未建立{preparationMode}資料，請使用上方新增按鈕。
               </section>
@@ -1666,7 +1869,7 @@ function App() {
 
         {editingItem && (
           <div className="fixed inset-0 z-20 flex items-end justify-center bg-ink/30 px-4 pb-24 pt-8 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-[28px] bg-white p-5 shadow-xl">
+            <div className="max-h-full w-full max-w-md overflow-y-auto rounded-[28px] bg-white p-5 shadow-xl">
               <div className="mb-4 flex items-center justify-between">
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{editingItem.date}</p>
@@ -1771,7 +1974,7 @@ function App() {
 
         {dataEditor && (
           <div className="fixed inset-0 z-20 flex items-end justify-center bg-ink/30 px-4 pb-24 pt-8 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-[28px] bg-white p-5 shadow-xl">
+            <div className="max-h-full w-full max-w-md overflow-y-auto rounded-[28px] bg-white p-5 shadow-xl">
               <div className="mb-4 flex items-center justify-between">
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.18em] text-muted">Firebase data</p>
@@ -1797,23 +2000,50 @@ function App() {
 
                 {dataEditor.kind === 'booking' && (
                   <>
-                    <label className="block text-xs font-bold text-muted">類型<input value={dataDraft.label ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, label: event.target.value })} className="form-field" /></label>
-                    <label className="block text-xs font-bold text-muted">補充資訊<input value={dataDraft.meta ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, meta: event.target.value })} className="form-field" /></label>
-                    {dataDraft.label === 'Hotel' && (
+                    <label className="block text-xs font-bold text-muted">類型<select value={dataDraft.label ?? 'Hotel'} onChange={(event) => setDataDraft({ ...dataDraft, label: event.target.value })} className="form-field"><option value="Hotel">住宿</option><option value="Car">租車</option><option value="Voucher">憑證</option></select></label>
+                    {dataDraft.label !== 'Voucher' && (
+                      <label className="block text-xs font-bold text-muted">訂購人<select value={dataDraft.purchaser ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, purchaser: event.target.value })} className="form-field"><option value="">請選擇成員</option>{members.map((member) => <option key={member.name} value={member.name}>{member.name}</option>)}</select></label>
+                    )}
+                    {(dataDraft.label === 'Hotel' || dataDraft.label === 'Car') && (
                       <div className="grid grid-cols-2 gap-3">
-                        <label className="text-xs font-bold text-muted">入住日期<input type="date" value={dataDraft.startDate ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, startDate: event.target.value })} className="form-field" /></label>
-                        <label className="text-xs font-bold text-muted">退房日期<input type="date" value={dataDraft.endDate ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, endDate: event.target.value })} className="form-field" /></label>
+                        <label className="text-xs font-bold text-muted">{dataDraft.label === 'Car' ? '租車日期' : '入住日期'}<input type="date" value={dataDraft.startDate ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, startDate: event.target.value })} className="form-field" /></label>
+                        <label className="text-xs font-bold text-muted">{dataDraft.label === 'Car' ? '歸還日期' : '退房日期'}<input type="date" value={dataDraft.endDate ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, endDate: event.target.value })} className="form-field" /></label>
+                        <label className="col-span-2 text-xs font-bold text-muted">訂單編號<input value={dataDraft.orderNumber ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, orderNumber: event.target.value })} className="form-field" /></label>
                       </div>
                     )}
-                    <label className="block text-xs font-bold text-muted">
+                    {dataDraft.label === 'Hotel' && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className="text-xs font-bold text-muted">Check-in 時間<input type="time" value={dataDraft.checkInTime ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, checkInTime: event.target.value })} className="form-field" /></label>
+                        <label className="text-xs font-bold text-muted">Check-out 時間<input type="time" value={dataDraft.checkOutTime ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, checkOutTime: event.target.value })} className="form-field" /></label>
+                      </div>
+                    )}
+                    {dataDraft.label === 'Car' && (
+                      <div className="space-y-3">
+                        {[
+                          ['vehicleModel', '租用車型', 'text'],
+                          ['pickupLocation', '租車地點', 'text'],
+                          ['pickupMapUrl', '租車地點 Google Maps 網址', 'url'],
+                          ['returnLocation', '還車地點', 'text'],
+                          ['returnMapUrl', '還車地點 Google Maps 網址', 'url'],
+                          ['actualPickupTime', '實際取車時間（當地時間）', 'datetime-local'],
+                        ].map(([key, label, type]) => (
+                          <label key={key} className="block text-xs font-bold text-muted">
+                            {label}
+                            <input type={type} value={dataDraft[key] ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, [key]: event.target.value })} className="form-field" />
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {dataDraft.label === 'Voucher' && <label className="block text-xs font-bold text-muted">
                       憑證檔案（PDF / JPG / PNG）
                       <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => void handleCertificateChange(event.target.files?.[0])} className="form-field file:mr-2 file:rounded-full file:border-0 file:bg-olive file:px-3 file:py-1 file:text-xs file:font-black file:text-white" />
-                    </label>
-                    {dataDraft.attachmentUrl && (
+                    </label>}
+                    {dataDraft.label === 'Voucher' && dataDraft.attachmentUrl && (
                       <button type="button" onClick={() => setPreviewAttachment({ url: dataDraft.attachmentUrl, name: dataDraft.attachmentName || 'certificate', type: dataDraft.attachmentType || 'application/pdf' })} className="w-full rounded-2xl bg-sky-50 px-3 py-2 text-left text-xs font-black text-sky-700">
                         已上傳：{dataDraft.attachmentName || '憑證'}，點擊預覽
                       </button>
                     )}
+                    <label className="block text-xs font-bold text-muted">補充資訊<textarea value={dataDraft.meta ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, meta: event.target.value })} rows={3} className="form-field resize-none" /></label>
                   </>
                 )}
 
@@ -1837,6 +2067,7 @@ function App() {
                         <input type={key === 'date' ? 'date' : 'text'} value={key === 'date' ? toDateInputValue(dataDraft[key] ?? '') : dataDraft[key] ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, [key]: event.target.value })} className="form-field" />
                       </label>
                     ))}
+                    <label className="col-span-2 text-xs font-bold text-muted">訂購人<select value={dataDraft.purchaser ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, purchaser: event.target.value })} className="form-field"><option value="">請選擇成員</option>{members.map((member) => <option key={member.name} value={member.name}>{member.name}</option>)}</select></label>
                   </div>
                 )}
 
@@ -1899,7 +2130,7 @@ function App() {
           <div className="fixed inset-0 z-30 flex items-center justify-center bg-ink/60 px-4 py-8 backdrop-blur-sm">
             <div className="flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-[28px] bg-white shadow-xl">
               <div className="flex items-center justify-between gap-3 border-b border-[#E6E7DE] px-4 py-3">
-                <div className="truncate text-sm font-black text-ink">{previewAttachment.name}</div>
+                <div className="min-w-0 text-sm font-black text-ink">{previewAttachment.name}</div>
                 <div className="flex shrink-0 items-center gap-2">
                   <a href={previewAttachment.url} download={previewAttachment.name} target="_blank" rel="noreferrer" className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-700">下載</a>
                   <button type="button" onClick={() => setPreviewAttachment(null)} className="rounded-full bg-sage px-3 py-1.5 text-xs font-black text-olive">關閉</button>
