@@ -146,6 +146,23 @@ const bookingModes: { id: BookingMode; label: string; icon: typeof faPlane }[] =
   { id: 'voucher', label: '憑證', icon: faFileLines },
 ]
 
+const memberColors = [
+  'bg-rose-200 text-rose-700',
+  'bg-amber-200 text-amber-700',
+  'bg-emerald-200 text-emerald-700',
+  'bg-sky-200 text-sky-700',
+  'bg-violet-200 text-violet-700',
+  'bg-orange-200 text-orange-700',
+  'bg-teal-200 text-teal-700',
+  'bg-fuchsia-200 text-fuchsia-700',
+]
+
+const randomMemberColor = (members: TripData['members']) => {
+  const unused = memberColors.filter((color) => !members.some((member) => member.color === color))
+  const choices = unused.length ? unused : memberColors
+  return choices[Math.floor(Math.random() * choices.length)]
+}
+
 const preparationModes = [
   { label: '待辦', icon: faListCheck },
   { label: '行李', icon: faSuitcaseRolling },
@@ -561,7 +578,12 @@ const normalizeTripData = (value: Partial<TripData> | null | undefined): TripDat
     : localTripData.bookingCards,
   expenseEntries: Array.isArray(value?.expenseEntries) ? (value.expenseEntries as TripData['expenseEntries']) : localTripData.expenseEntries,
   planningTasks: Array.isArray(value?.planningTasks) ? (value.planningTasks as TripData['planningTasks']).map((task) => ({ ...task, mode: task.mode || '待辦' })) : localTripData.planningTasks,
-  members: Array.isArray(value?.members) ? (value.members as TripData['members']) : localTripData.members,
+  members: (Array.isArray(value?.members) ? (value.members as TripData['members']) : localTripData.members).reduce<TripData['members']>((assigned, member) => {
+    const color = member.color && !assigned.some((previous) => previous.color === member.color)
+      ? member.color
+      : memberColors.find((candidate) => !assigned.some((previous) => previous.color === candidate)) || memberColors[assigned.length % memberColors.length]
+    return [...assigned, { ...member, color }]
+  }, []),
   parkSections: Array.isArray(value?.parkSections) ? (value.parkSections as ParkSection[]) : localTripData.parkSections,
 })
 
@@ -720,6 +742,20 @@ function App() {
     const controller = new AbortController()
     const fallbackLocation = weatherLocations.find((candidate) => candidate.name === 'Orlando')!
 
+    const resolveLocationName = async (latitude: number, longitude: number) => {
+      try {
+        const params = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), localityLanguage: 'zh' })
+        const response = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?${params}`, {
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]),
+        })
+        if (!response.ok) throw new Error('Location request failed')
+        const data = await response.json() as { city?: string; locality?: string; principalSubdivision?: string }
+        return data.city || data.locality || data.principalSubdivision || '無法辨識地點'
+      } catch {
+        return '無法辨識地點'
+      }
+    }
+
     const loadWeather = async (latitude: number, longitude: number, locationName: string) => {
       setWeatherState({ location: locationName, description: '讀取中', temperature: '--' })
       try {
@@ -741,7 +777,12 @@ function App() {
       void loadWeather(fallbackLocation.latitude, fallbackLocation.longitude, 'Orlando')
     } else {
       navigator.geolocation.getCurrentPosition(
-        (position) => void loadWeather(position.coords.latitude, position.coords.longitude, '目前位置'),
+        (position) => {
+          const { latitude, longitude } = position.coords
+          void resolveLocationName(latitude, longitude).then((name) => {
+            if (!controller.signal.aborted) void loadWeather(latitude, longitude, name)
+          })
+        },
         () => void loadWeather(fallbackLocation.latitude, fallbackLocation.longitude, 'Orlando'),
         { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 },
       )
@@ -792,6 +833,8 @@ function App() {
   const countdown = getFlightCountdown(tripData.flightInfo)
   const expenseEntries = tripData.expenseEntries
   const planningTasks = tripData.planningTasks
+  const visiblePlanningTasks = planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationAssignee === '全體' || task.assignee === preparationAssignee))
+    .sort((first, second) => Number(first.done) - Number(second.done))
   const members = tripData.members
   const parkSections = tripData.parkSections
 
@@ -1022,7 +1065,7 @@ function App() {
     }
 
     if (dataEditor.kind === 'member') {
-      const item = { name: dataDraft.title.trim(), role: dataDraft.role || '旅伴', color: dataDraft.color || 'bg-emerald-200 text-emerald-700' }
+      const item = { name: dataDraft.title.trim(), role: dataDraft.role || '旅伴', color: dataDraft.color || randomMemberColor(tripData.members) }
       const members = [...tripData.members]
       if (dataEditor.index === null) members.push(item)
       else members[dataEditor.index] = item
@@ -1228,7 +1271,7 @@ function App() {
 
   const reorderPlanningTasks = async (targetIndex: number) => {
     if (draggingTaskIndex === null || draggingTaskIndex === targetIndex) return
-    const visibleTasks = planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationAssignee === '全體' || task.assignee === preparationAssignee))
+    const visibleTasks = visiblePlanningTasks
     const sourceTask = visibleTasks[draggingTaskIndex]
     const targetTask = visibleTasks[targetIndex]
     if (!sourceTask || !targetTask) return
@@ -1272,7 +1315,7 @@ function App() {
         openDataEditor({ kind: 'task', index: null }, { title: '', assignee: preparationAssignee, done: 'false', mode: preparationMode })
         break
       case 'members':
-        openDataEditor({ kind: 'member', index: null }, { title: '', role: '旅伴', color: 'bg-emerald-200 text-emerald-700' })
+        openDataEditor({ kind: 'member', index: null }, { title: '', role: '旅伴', color: randomMemberColor(tripData.members) })
         break
     }
   }
@@ -1327,7 +1370,7 @@ function App() {
                   <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/75">Weather forecast</p>
                   <h2 className="mt-2 text-2xl font-black text-white">{weatherState.location}</h2>
                   <div className="mt-1 text-base font-bold text-white/90">{weatherState.description}</div>
-                  <p className="mt-1 text-[10px] font-bold text-white/65">目前位置 · Open-Meteo</p>
+                  <p className="mt-1 text-[10px] font-bold text-white/65">Open-Meteo</p>
                 </div>
                 <div className="weather-sun" aria-hidden="true">☀</div>
               </div>
@@ -1789,16 +1832,22 @@ function App() {
 
 
 
-            {planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationAssignee === '全體' || task.assignee === preparationAssignee)).map((task, visibleIndex) => {
+            {visiblePlanningTasks.map((task, visibleIndex) => {
               const index = planningTasks.indexOf(task)
               return (
-                <section key={task.title} draggable onDragStart={() => setDraggingTaskIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverTaskIndex(visibleIndex) }} onDrop={() => void reorderPlanningTasks(visibleIndex)} onDragEnd={() => { setDraggingTaskIndex(null); setDragOverTaskIndex(null) }} className={`todo-card draggable-card cursor-grab p-4 ${draggingTaskIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverTaskIndex === visibleIndex ? 'drag-over-card' : ''}`}>
-                  <div className="mb-2 flex items-center gap-2 text-[10px] font-black text-[#9B907E]">
-                    <span className="rounded-md bg-[#E5EBD8] px-2 py-1">{task.assignee}</span>
-                  </div>
+                <Fragment key={index}>
+                  {task.done && (visibleIndex === 0 || !visiblePlanningTasks[visibleIndex - 1].done) && (
+                    <div className="flex items-center gap-3 pb-2 pt-4" role="separator" aria-label="已完成項目">
+                      <div className="h-px flex-1 bg-muted/40" />
+                      <span className="text-xs font-bold text-muted">已完成</span>
+                      <div className="h-px flex-1 bg-muted/40" />
+                    </div>
+                  )}
+                <section draggable onDragStart={() => setDraggingTaskIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverTaskIndex(visibleIndex) }} onDrop={() => void reorderPlanningTasks(visibleIndex)} onDragEnd={() => { setDraggingTaskIndex(null); setDragOverTaskIndex(null) }} className={`category-card todo-card draggable-card cursor-grab p-4 ${task.done ? 'completed-task' : ''} ${draggingTaskIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverTaskIndex === visibleIndex ? 'drag-over-card' : ''}`}>
+                  <span className={`member-color label-chip category-edge-label ${members.find((member) => member.name === task.assignee)?.color || 'bg-slate-200 text-slate-700'}`}>{task.assignee}</span>
                   <div className="flex items-center gap-3">
-                    <button type="button" onClick={() => void togglePlanningTask(index)} className={`flex h-10 w-10 items-center justify-center rounded-full border-2 ${task.done ? 'border-olive bg-olive text-white' : 'border-[#A8D093] text-olive'}`}>
-                      {task.done ? '✓' : ''}
+                    <button type="button" onClick={() => void togglePlanningTask(index)} aria-label={task.done ? '標記為未完成' : '標記為完成'} aria-pressed={task.done} className="flex h-11 w-8 shrink-0 items-center justify-center">
+                      <span className={`flex h-7 w-7 items-center justify-center rounded-full border text-sm font-bold ${task.done ? 'border-olive bg-olive text-white' : 'border-[#A8D093] text-olive'}`} aria-hidden="true">{task.done ? '✓' : ''}</span>
                     </button>
                     <div className={`flex-1 text-lg font-black ${task.done ? 'text-ink/40 line-through' : 'text-ink'}`}>{task.title}</div>
                     <button type="button" onClick={() => openDataEditor({ kind: 'task', index }, { title: task.title, assignee: task.assignee, done: String(task.done), mode: task.mode || preparationMode })} className="text-lg text-[#B8AD99]" aria-label="編輯待辦">
@@ -1806,10 +1855,11 @@ function App() {
                     </button>
                   </div>
                 </section>
+                </Fragment>
               )
             })}
 
-            {planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationAssignee === '全體' || task.assignee === preparationAssignee)).length === 0 && (
+            {visiblePlanningTasks.length === 0 && (
               <section className="todo-empty p-5 text-center text-sm font-bold text-muted">
                 目前尚未建立{preparationMode}資料，請點選右下角「＋」新增。
               </section>
@@ -1828,7 +1878,7 @@ function App() {
                   {members.map((member, index) => (
                   <div key={member.name} className="flex items-center justify-between detail-card rounded-[18px] bg-transparent p-3">
                     <div className="flex items-center gap-3">
-                      <div className={`flex h-11 w-11 items-center justify-center rounded-full text-sm font-black ${member.color}`}>
+                      <div className={`flex h-11 w-11 items-center justify-center rounded-full text-sm font-black member-color ${member.color}`}>
                         {member.name.slice(0, 1)}
                       </div>
                       <div>

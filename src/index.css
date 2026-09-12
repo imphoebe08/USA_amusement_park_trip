@@ -259,3 +259,64 @@ html[data-theme='dark'] .map-link {
   transform: translateY(-50%);
   max-width: calc(100% - 2rem);
 }
+
+
+.todo-card.completed-task {
+  background-color: #eceeeb;
+  border-color: #c4cbc3;
+}
+
+html[data-theme='dark'] .todo-card:not(.completed-task) {
+  background-color: #435d73;
+  border-color: #7b9bb3;
+}
+
+html[data-theme='dark'] .todo-card.completed-task {
+  background-color: rgb(120 129 134 / 72%);
+  border-color: #929da2;
+}
+
+html[data-theme='dark'] .completed-task [class*='text-ink/'],
+html[data-theme='dark'] .completed-task button[aria-label='編輯待辦'] {
+  color: #f1f3ef;
+}
+
+.member-color.bg-rose-200 {
+  background-color: #be123c;
+  color: #fff;
+}
+
+.member-color.bg-amber-200 {
+  background-color: #facc15;
+  color: #422006;
+}
+
+.member-color.bg-emerald-200 {
+  background-color: #15803d;
+  color: #fff;
+}
+
+.member-color.bg-sky-200 {
+  background-color: #0369a1;
+  color: #fff;
+}
+
+.member-color.bg-violet-200 {
+  background-color: #6d28d9;
+  color: #fff;
+}
+
+.member-color.bg-orange-200 {
+  background-color: #ea580c;
+  color: #fff;
+}
+
+.member-color.bg-teal-200 {
+  background-color: #2dd4bf;
+  color: #134e4a;
+}
+
+.member-color.bg-fuchsia-200 {
+  background-color: #e879f9;
+  color: #4a044e;
+}
