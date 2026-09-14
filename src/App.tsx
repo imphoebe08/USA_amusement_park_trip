@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { DragHandle } from './DragHandle'
+import { PullToRefresh } from './PullToRefresh'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faCalendarDays,
@@ -1968,6 +1969,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-sand text-ink">
+      <PullToRefresh disabled={isLoading || isSaving || Boolean(editingItem || dataEditor || previewAttachment)} />
       {errorMessage && createPortal(
         <div className="pointer-events-none fixed inset-x-0 top-0 z-[100] px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
           <div className="pointer-events-auto mx-auto flex max-h-[50dvh] max-w-md items-start gap-3 overflow-y-auto rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-xl">
