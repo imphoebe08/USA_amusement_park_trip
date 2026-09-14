@@ -20,7 +20,7 @@ import {
   faUsers,
 } from '@fortawesome/free-solid-svg-icons'
 import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { doc, getDoc, getDocFromServer, setDoc } from 'firebase/firestore'
 
 import { db, ensureAnonymousAuth, storage } from './firebase'
 
@@ -624,7 +624,7 @@ const removeUndefined = <T,>(value: T): T => {
 
 let hasLoadedTripData = false
 
-const getTripDataFromFirebase = async (): Promise<TripData> => {
+const getTripDataFromFirebase = async (fromServer = false): Promise<TripData> => {
   if (!db) throw new Error('Firebase 尚未設定，無法讀取雲端行程。')
 
   const firestore = db
@@ -633,7 +633,8 @@ const getTripDataFromFirebase = async (): Promise<TripData> => {
     const snapshot = await Promise.race([
       (async () => {
         await ensureAnonymousAuth()
-        return getDoc(doc(firestore, 'trip', 'orlando-escape'))
+        const reference = doc(firestore, 'trip', 'orlando-escape')
+        return fromServer ? getDocFromServer(reference) : getDoc(reference)
       })(),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error('Firebase 連線超過 20 秒，尚未讀取到行程。請確認網路或 VPN 狀態後按「重新讀取」。')), 20000)
@@ -714,6 +715,7 @@ function App() {
   const [dataEditor, setDataEditor] = useState<DataEditor | null>(null)
   const [dataDraft, setDataDraft] = useState<Record<string, string>>({})
   const [isSaving, setIsSaving] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [draggingScheduleIndex, setDraggingScheduleIndex] = useState<number | null>(null)
   const [draggingRouteIndex, setDraggingRouteIndex] = useState<number | null>(null)
   const [draggingBookingIndex, setDraggingBookingIndex] = useState<number | null>(null)
@@ -1969,7 +1971,20 @@ function App() {
 
   return (
     <div className="min-h-screen bg-sand text-ink">
-      <PullToRefresh disabled={isLoading || isSaving || Boolean(editingItem || dataEditor || previewAttachment)} />
+      <PullToRefresh disabled={isLoading || isSaving || Boolean(editingItem || dataEditor || previewAttachment)} onRefresh={async () => {
+        setIsRefreshing(true)
+        try {
+          const data = await getTripDataFromFirebase(true)
+          setTripData(data)
+          setLoadFailed(false)
+          setErrorMessage(null)
+        } catch (error) {
+          setErrorMessage(getFirebaseErrorMessage(error, '更新失敗，請稍後再試。'))
+          throw error
+        } finally {
+          setIsRefreshing(false)
+        }
+      }} />
       {errorMessage && createPortal(
         <div className="pointer-events-none fixed inset-x-0 top-0 z-[100] px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
           <div className="pointer-events-auto mx-auto flex max-h-[50dvh] max-w-md items-start gap-3 overflow-y-auto rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-xl">
@@ -1979,7 +1994,7 @@ function App() {
         </div>,
         document.body,
       )}
-      <div className="mx-auto min-h-screen max-w-md bg-sand pb-44">
+      <div inert={isRefreshing} className="mx-auto min-h-screen max-w-md bg-sand pb-44">
         <header className="px-4 pb-3 pt-5">
           <div className="mb-4 flex items-center justify-between">
             <div className="flex min-w-0 items-center gap-3">
@@ -2309,7 +2324,7 @@ function App() {
           </div>
         )}
 
-        {!isLoading && !loadFailed && !editingItem && !dataEditor && !previewAttachment && (activeTab !== 'park' || selectedParkDay) && (
+        {!isLoading && !isRefreshing && !loadFailed && !editingItem && !dataEditor && !previewAttachment && (activeTab !== 'park' || selectedParkDay) && (
           <div className="pointer-events-none fixed inset-x-0 bottom-24 z-10 mx-auto flex max-w-md justify-end px-4">
             <button
               type="button"

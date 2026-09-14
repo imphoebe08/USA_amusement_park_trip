@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const ts = require('typescript')
 const vm = require('node:vm')
 
-function setup({ mobile = true, scroll = 0, nested = false } = {}) {
+function setup({ mobile = true, scroll = 0, nested = false, refreshWork = () => undefined } = {}) {
   const listeners = new Map()
   class Element {
     closest() { return null }
@@ -24,7 +24,7 @@ function setup({ mobile = true, scroll = 0, nested = false } = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText
   vm.runInNewContext(code, context)
-  const cleanup = context.exports.installPullToRefresh({ onProgress: value => { progress = value }, onRefresh: () => { refreshed++ } })
+  const cleanup = context.exports.installPullToRefresh({ onProgress: value => { progress = value }, onRefresh: () => { refreshed++; return refreshWork() } })
   const emit = (name, x = 0, y = 0, count = 1) => {
     let prevented = false
     listeners.get(name)({ type: name, target, touches: Array.from({ length: count }, (_, identifier) => ({ identifier, clientX: x, clientY: y })), cancelable: true, preventDefault() { prevented = true } })
@@ -33,11 +33,11 @@ function setup({ mobile = true, scroll = 0, nested = false } = {}) {
   return { emit, body, cleanup, get refreshed() { return refreshed }, get progress() { return progress } }
 }
 
-test('pulling at the top refreshes once on release, not during movement', () => {
+test('pulling at the top refreshes once on release, not during movement', async () => {
   const ui = setup()
   ui.emit('touchstart'); assert.equal(ui.emit('touchmove', 0, 150), true)
   assert.ok(ui.progress >= 72); assert.equal(ui.refreshed, 0)
-  ui.emit('touchend'); ui.emit('touchend'); assert.equal(ui.refreshed, 1)
+  ui.emit('touchend'); ui.emit('touchend'); await Promise.resolve(); assert.equal(ui.refreshed, 1)
   ui.cleanup()
 })
 
@@ -60,3 +60,18 @@ for (const scenario of ['short', 'horizontal', 'cancel', 'drag', 'multitouch', '
     assert.equal(ui.refreshed, 0); assert.equal(ui.progress, 0); ui.cleanup()
   })
 }
+
+
+test('refresh keeps the revealed space, blocks repeats while pending, and allows the next pull after completion', async () => {
+  let resolve
+  const ui = setup({ refreshWork: () => new Promise(r => { resolve = r }) })
+  ui.emit('touchstart'); ui.emit('touchmove', 0, 150); ui.emit('touchend')
+  await Promise.resolve()
+  assert.ok(ui.progress >= 72)
+  ui.emit('touchstart'); ui.emit('touchmove', 0, 150); ui.emit('touchend')
+  assert.equal(ui.refreshed, 1)
+  resolve(); await new Promise(r => setImmediate(r))
+  ui.emit('touchstart'); ui.emit('touchmove', 0, 150); ui.emit('touchend')
+  await Promise.resolve(); assert.equal(ui.refreshed, 2)
+  resolve(); ui.cleanup()
+})

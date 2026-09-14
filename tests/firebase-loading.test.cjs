@@ -16,7 +16,7 @@ function setup(read) {
   const writes = []
   const context = vm.createContext({
     db: {}, navigator: { onLine: true }, localTripData: { demo: true },
-    ensureAnonymousAuth: async () => {}, getDoc: read, doc: () => ({}),
+    ensureAnonymousAuth: async () => {}, getDoc: read, getDocFromServer: read, doc: () => ({}),
     normalizeTripData: value => value, removeUndefined: value => value,
     setDoc: async (_, data) => { writes.push(data) },
     setTimeout: (fn, ms) => { timeout = fn; delay = ms; return 1 },

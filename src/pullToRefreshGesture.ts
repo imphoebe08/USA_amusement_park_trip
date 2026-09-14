@@ -2,7 +2,7 @@ export const PULL_THRESHOLD = 72
 
 export function installPullToRefresh({ onProgress, onRefresh }: {
   onProgress: (distance: number) => void
-  onRefresh: () => void
+  onRefresh: () => void | Promise<void>
 }) {
   let gesture: { id: number; x: number; y: number; distance: number; pulling: boolean } | null = null
   let refreshing = false
@@ -44,8 +44,11 @@ export function installPullToRefresh({ onProgress, onRefresh }: {
     if (!gesture) return
     const shouldRefresh = event.type !== 'touchcancel' && gesture.distance >= PULL_THRESHOLD && !blocked()
     if (gesture.pulling && event.cancelable) event.preventDefault()
-    reset()
-    if (shouldRefresh && !refreshing) { refreshing = true; onRefresh() }
+    if (shouldRefresh && !refreshing) {
+      gesture = null
+      refreshing = true
+      void Promise.resolve().then(onRefresh).finally(() => { refreshing = false }).catch(() => { onProgress(0) })
+    } else reset()
   }
   document.addEventListener('touchstart', start, { passive: true })
   document.addEventListener('touchmove', move, { passive: false })
