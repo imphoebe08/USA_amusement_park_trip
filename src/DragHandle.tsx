@@ -11,13 +11,12 @@ type Props = {
 
 // Native touch listeners let ordinary swipes scroll until the long press activates.
 export function DragHandle(props: Props) {
-  const handle = useRef<HTMLButtonElement>(null)
+  const anchor = useRef<HTMLSpanElement>(null)
   const callbacks = useRef(props)
   useLayoutEffect(() => { callbacks.current = props })
 
   useEffect(() => {
-    const button = handle.current!
-    const card = button.closest<HTMLElement>('[data-drag-group]')!
+    const card = anchor.current!.closest<HTMLElement>('[data-drag-group]')!
     let timer = 0
     let frame = 0
     let pending = false
@@ -79,7 +78,7 @@ export function DragHandle(props: Props) {
     const begin = (eventTarget: EventTarget | null, nextX: number, nextY: number) => {
       if (pending || active || settling || document.body.dataset.dragOwner) return
       const element = eventTarget instanceof Element ? eventTarget : null
-      if (element?.closest('button, a, input, select, textarea, [contenteditable="true"]') && !button.contains(element)) return
+      if (element?.closest('button, a, input, select, textarea, [contenteditable="true"]')) return
       pending = true
       startX = x = nextX
       startY = y = nextY
@@ -226,5 +225,5 @@ export function DragHandle(props: Props) {
     }
   }, [props.group, props.index])
 
-  return <button ref={handle} type="button" className="drag-handle" aria-label="長按並拖曳排序" title="長按卡片或此處以拖曳排序">⠿</button>
+  return <span ref={anchor} hidden aria-hidden="true" />
 }

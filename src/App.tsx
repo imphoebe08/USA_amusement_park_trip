@@ -26,6 +26,10 @@ import { db, ensureAnonymousAuth, storage } from './firebase'
 type TabId = 'schedule' | 'bookings' | 'expense' | 'park' | 'planning' | 'members'
 type Category = '景點' | '美食' | '交通' | '住宿'
 type ParkGroup = '迪士尼' | '環球影城'
+const parkOptions = {
+  universal: ['Epic', 'Adventure', 'Studio'],
+  disney: ['Magic Kingdom', 'EPCOT', 'Hollywood Studio', 'Animal Kingdom'],
+} as const
 type BookingMode = 'flight' | 'hotel' | 'car' | 'voucher'
 type FlightInfo = {
   airline: string
@@ -67,6 +71,7 @@ type DataEditor = {
 }
 
 type ParkDayRoute = {
+  park?: string
   time: string
   title: string
   area: string
@@ -1087,6 +1092,7 @@ function App() {
       const route = {
         time: dataDraft.time || '全天',
         title: dataDraft.title.trim(),
+        park: parkOptions[dataEditor.parkId].find((park) => park === dataDraft.park) ?? '',
         area: dataDraft.area || '',
         type: (dataDraft.type || '景點') as ParkDayRoute['type'],
         note: dataDraft.note || '',
@@ -1743,7 +1749,7 @@ function App() {
           <div className="space-y-4">
             <section className="soft-card p-2.5">
               <div className="flex gap-2 rounded-full bg-transparent p-1">
-                {parkSections.map((park) => (
+                {[...parkSections].sort((a, b) => Number(a.id !== 'universal') - Number(b.id !== 'universal')).map((park) => (
                   <button
                     key={park.id}
                     type="button"
@@ -1760,7 +1766,6 @@ function App() {
 
             <section className="soft-card section-info p-4">
               <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{selectedPark.name}</p>
-              <h2 className="mt-1 text-lg font-black tracking-[-0.02em]">{selectedPark.description}</h2>
             </section>
 
             <section className="mb-5">
@@ -1813,16 +1818,17 @@ function App() {
                             <div className="font-black text-ink">{route.title}</div>
                             <button
                               type="button"
-                              onClick={() => openDataEditor({ kind: 'route', index, parkId: selectedPark.id, dayId: selectedParkDay.id }, { time: route.time, title: route.title, area: route.area, type: route.type, note: route.note, rating: String(route.rating ?? 0) })}
+                              onClick={() => openDataEditor({ kind: 'route', index, parkId: selectedPark.id, dayId: selectedParkDay.id }, { time: route.time, title: route.title, park: route.park ?? '', area: route.area, type: route.type, note: route.note, rating: String(route.rating ?? 0) })}
                               className="shrink-0 text-[10px] font-black text-olive"
                             >
                               編輯
                             </button>
                           </div>
                           
+                          {route.park && <div className="mt-1 text-xs font-bold text-muted">{route.park}</div>}
                           <div className="mt-1 flex items-center gap-2 text-sm text-[#292524]">{route.area}</div>
-                          <div className="mt-2 text-xs leading-5 text-ink/70">{route.note}</div>
                           {route.type === '設施' && <StarRating value={route.rating ?? 0} />}
+                          <div className="mt-2 text-xs leading-5 text-ink/70">{route.note}</div>
                         </div>
                       </div>
                     )
@@ -2220,8 +2226,14 @@ function App() {
                       <label className="text-xs font-bold text-muted">時間<input value={dataDraft.time ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, time: event.target.value })} className="form-field" /></label>
                       <label className="text-xs font-bold text-muted">類型<select value={dataDraft.type ?? '景點'} onChange={(event) => setDataDraft({ ...dataDraft, type: event.target.value })} className="form-field"><option>景點</option><option>美食</option><option>交通</option><option>休息</option><option>設施</option></select></label>
                     </div>
-                    {dataDraft.type === '設施' && <div><div className="text-xs font-bold text-muted">五星評分</div><StarRating value={Number(dataDraft.rating) || 0} onChange={(rating) => setDataDraft({ ...dataDraft, rating: String(rating) })} /></div>}
+                    <label className="block text-xs font-bold text-muted">園區
+                      <select value={dataDraft.park ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, park: event.target.value })} className="form-field">
+                        <option value="">請選擇園區</option>
+                        {parkOptions[dataEditor.parkId ?? selectedPark.id].map((park) => <option key={park} value={park}>{park}</option>)}
+                      </select>
+                    </label>
                     <label className="block text-xs font-bold text-muted">區域<input value={dataDraft.area ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, area: event.target.value })} className="form-field" /></label>
+                    {dataDraft.type === '設施' && <div><div className="text-xs font-bold text-muted">五星評分</div><StarRating value={Number(dataDraft.rating) || 0} onChange={(rating) => setDataDraft({ ...dataDraft, rating: String(rating) })} /></div>}
                     <label className="block text-xs font-bold text-muted">備註<textarea value={dataDraft.note ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, note: event.target.value })} rows={2} className="form-field resize-none" /></label>
                   </>
                 )}

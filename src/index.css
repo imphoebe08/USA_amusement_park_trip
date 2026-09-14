@@ -323,12 +323,9 @@ html[data-theme='dark'] .completed-task button[aria-label='編輯待辦'] {
 
 .draggable-card {
   position: relative;
-  padding-bottom: 48px;
 }
-.drag-handle { position: absolute; bottom: 4px; right: 8px; width: 44px; height: 40px; touch-action: auto; user-select: none; -webkit-touch-callout: none; cursor: grab; font-size: 26px; color: #68734d; border-radius: 12px; background: #f0f2e9; }
-.drag-handle:active { cursor: grabbing; }
-.drag-handle:focus-visible, .rating-star:focus-visible { outline: 2px solid #68734d; outline-offset: 2px; }
-.rating-star { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 44px; font-size: 28px; color: #d1d5db; }
+.rating-star:focus-visible { outline: 2px solid #68734d; outline-offset: 2px; }
+.rating-star { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 32px; font-size: 20px; color: #d1d5db; }
 .rating-star.is-rated { color: #b77912; }
 
 /* The source remains in layout while the lifted copy follows the finger. */
