@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import { createPortal, flushSync } from 'react-dom'
+import { DragHandle } from './DragHandle'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faCalendarDays,
@@ -644,69 +645,6 @@ const emptyScheduleItem: ScheduleItem = {
   note: '',
 }
 
-function DragHandle({ group, index, onStart, onOver, onEnd, onMove }: {
-  group: string
-  index: number
-  onStart: (index: number) => void
-  onOver: (index: number | null) => void
-  onEnd: () => void
-  onMove: (target: number, source: number) => Promise<void>
-}) {
-  const gesture = useRef<{ pointerId: number; target: number | null; y: number; x: number; frame: number } | null>(null)
-  useEffect(() => () => {
-    if (gesture.current) cancelAnimationFrame(gesture.current.frame)
-  }, [])
-  const locateTarget = () => {
-    const current = gesture.current
-    if (!current) return
-    const card = document.elementFromPoint(current.x, current.y)?.closest<HTMLElement>('[data-drag-group]')
-    current.target = card?.dataset.dragGroup === group ? Number(card.dataset.dragIndex) : null
-    onOver(current.target)
-  }
-  return <button type="button" className="drag-handle" aria-label="拖曳排序" title="按住並拖曳以排序"
-    onDragStart={(event) => { event.preventDefault(); event.stopPropagation() }}
-    onPointerDown={(event) => {
-      if (!event.isPrimary || event.button !== 0) return
-      event.preventDefault()
-      event.stopPropagation()
-      event.currentTarget.setPointerCapture(event.pointerId)
-      gesture.current = { pointerId: event.pointerId, target: index, x: event.clientX, y: event.clientY, frame: 0 }
-      onStart(index)
-      const scroll = () => {
-        const current = gesture.current
-        if (!current) return
-        const edge = 90
-        const speed = current.y < edge ? -10 : current.y > window.innerHeight - edge ? 10 : 0
-        if (speed) { window.scrollBy(0, speed); locateTarget() }
-        current.frame = requestAnimationFrame(scroll)
-      }
-      gesture.current.frame = requestAnimationFrame(scroll)
-    }}
-    onPointerMove={(event) => {
-      if (!gesture.current || gesture.current.pointerId !== event.pointerId) return
-      gesture.current.x = event.clientX
-      gesture.current.y = event.clientY
-      locateTarget()
-    }}
-    onPointerUp={(event) => {
-      const current = gesture.current
-      if (!current || current.pointerId !== event.pointerId) return
-      cancelAnimationFrame(current.frame)
-      gesture.current = null
-      onEnd()
-      if (current.target !== null && current.target !== index) void onMove(current.target, index)
-    }}
-    onLostPointerCapture={() => {
-      if (gesture.current) { cancelAnimationFrame(gesture.current.frame); gesture.current = null; onEnd() }
-    }}
-    onPointerCancel={() => {
-      if (gesture.current) cancelAnimationFrame(gesture.current.frame)
-      gesture.current = null
-      onEnd()
-    }}
-  >⠿</button>
-}
-
 function StarRating({ value, onChange }: { value: number; onChange?: (rating: number) => void }) {
   return <div className="flex flex-wrap items-center" role="group" aria-label="設施評分">
     {[1, 2, 3, 4, 5].map((star) => onChange
@@ -1260,11 +1198,13 @@ function App() {
     setDragOverScheduleIndex(null)
     try {
       await saveTripDataToFirebase(nextTripData)
-      setTripData(nextTripData)
+      flushSync(() => setTripData(nextTripData))
       setErrorMessage(null)
+      return true
     } catch (error) {
       console.error('Failed to reorder itinerary items:', error)
       setErrorMessage(getFirebaseErrorMessage(error, '行程排序儲存失敗'))
+      return false
     }
   }
 
@@ -1288,11 +1228,13 @@ function App() {
     setDragOverRouteIndex(null)
     try {
       await saveTripDataToFirebase(nextTripData)
-      setTripData(nextTripData)
+      flushSync(() => setTripData(nextTripData))
       setErrorMessage(null)
+      return true
     } catch (error) {
       console.error('Failed to reorder park routes:', error)
       setErrorMessage(getFirebaseErrorMessage(error, '樂園路線排序儲存失敗'))
+      return false
     }
   }
 
@@ -1312,11 +1254,13 @@ function App() {
     setDragOverBookingIndex(null)
     try {
       await saveTripDataToFirebase(nextTripData)
-      setTripData(nextTripData)
+      flushSync(() => setTripData(nextTripData))
       setErrorMessage(null)
+      return true
     } catch (error) {
       console.error('Failed to reorder booking cards:', error)
       setErrorMessage(getFirebaseErrorMessage(error, '預訂排序儲存失敗'))
+      return false
     }
   }
 
@@ -1335,11 +1279,13 @@ function App() {
     setDragOverFlightIndex(null)
     try {
       await saveTripDataToFirebase(nextTripData)
-      setTripData(nextTripData)
+      flushSync(() => setTripData(nextTripData))
       setErrorMessage(null)
+      return true
     } catch (error) {
       console.error('Failed to reorder flights:', error)
       setErrorMessage(getFirebaseErrorMessage(error, '機票排序儲存失敗'))
+      return false
     }
   }
 
@@ -1359,11 +1305,13 @@ function App() {
     setDragOverTaskIndex(null)
     try {
       await saveTripDataToFirebase(nextTripData)
-      setTripData(nextTripData)
+      flushSync(() => setTripData(nextTripData))
       setErrorMessage(null)
+      return true
     } catch (error) {
       console.error('Failed to reorder preparation tasks:', error)
       setErrorMessage(getFirebaseErrorMessage(error, '準備項目排序儲存失敗'))
+      return false
     }
   }
 

@@ -99,12 +99,12 @@ textarea {
   }
 
   .dragging-card {
-    transform: scale(0.98) rotate(0.4deg);
+    transform: none;
     box-shadow: 0 14px 24px rgba(86, 105, 74, 0.18);
   }
 
   .drag-over-card {
-    transform: translateY(5px);
+    transform: none;
     border-color: #80b95d !important;
     box-shadow: 0 0 0 3px rgba(128, 185, 93, 0.2);
   }
@@ -325,8 +325,48 @@ html[data-theme='dark'] .completed-task button[aria-label='編輯待辦'] {
   position: relative;
   padding-bottom: 48px;
 }
-.drag-handle { position: absolute; bottom: 4px; right: 8px; width: 44px; height: 40px; touch-action: none; user-select: none; -webkit-touch-callout: none; cursor: grab; font-size: 26px; color: #68734d; border-radius: 12px; background: #f0f2e9; }
+.drag-handle { position: absolute; bottom: 4px; right: 8px; width: 44px; height: 40px; touch-action: auto; user-select: none; -webkit-touch-callout: none; cursor: grab; font-size: 26px; color: #68734d; border-radius: 12px; background: #f0f2e9; }
 .drag-handle:active { cursor: grabbing; }
 .drag-handle:focus-visible, .rating-star:focus-visible { outline: 2px solid #68734d; outline-offset: 2px; }
 .rating-star { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; min-height: 44px; font-size: 28px; color: #d1d5db; }
 .rating-star.is-rated { color: #b77912; }
+
+/* The source remains in layout while the lifted copy follows the finger. */
+.is-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+.draggable-card { -webkit-touch-callout: none; }
+.drag-source { opacity: 0.25 !important; }
+.drop-zone-active {
+  outline: 2px dashed #71944e;
+  outline-offset: 4px;
+  background-color: #edf6df !important;
+  box-shadow: 0 0 0 6px rgb(128 185 93 / 15%);
+}
+.drag-preview {
+  position: fixed !important;
+  z-index: 100;
+  margin: 0 !important;
+  pointer-events: none !important;
+  opacity: 0.96 !important;
+  transform: scale(1.035);
+  box-shadow: 0 24px 48px rgb(36 49 25 / 30%) !important;
+  outline: 1px solid rgb(113 148 78 / 45%);
+  transition: none !important;
+  overflow: hidden;
+}
+.drag-saving::after {
+  content: '儲存排序中…';
+  position: absolute;
+  bottom: 8px;
+  left: 12px;
+  font-size: 12px;
+  color: #526c38;
+  background: #edf6df;
+  border-radius: 8px;
+  padding: 4px 8px;
+}
+.drag-landing-hidden { visibility: hidden; }
+html[data-theme='dark'] .drop-zone-active { background-color: #34452c !important; }
+@media (prefers-reduced-motion: reduce) {
+  .draggable-card { transition: none; }
+  .drag-preview { transform: none; }
+}
