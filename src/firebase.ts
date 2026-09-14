@@ -3,8 +3,8 @@ import { getAnalytics, isSupported, type Analytics } from 'firebase/analytics'
 import { connectAuthEmulator, getAuth, signInAnonymously, type Auth } from 'firebase/auth'
 import {
   connectFirestoreEmulator,
-  enableIndexedDbPersistence,
-  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
   type Firestore,
 } from 'firebase/firestore'
 import { getStorage, type FirebaseStorage } from 'firebase/storage'
@@ -30,7 +30,9 @@ export const app: FirebaseApp | null = isFirebaseConfigured
   : null
 
 export const auth: Auth | null = app ? getAuth(app) : null
-export const db: Firestore | null = app ? getFirestore(app) : null
+export const db: Firestore | null = app
+  ? initializeFirestore(app, { localCache: persistentLocalCache() })
+  : null
 export const storage: FirebaseStorage | null = app ? getStorage(app) : null
 export let analytics: Analytics | null = null
 
@@ -55,16 +57,6 @@ if (app && auth && db && import.meta.env.DEV) {
     connectAuthEmulator(auth, 'http://127.0.0.1:9099')
     connectFirestoreEmulator(db, '127.0.0.1', 8080)
   }
-}
-
-if (db) {
-  void enableIndexedDbPersistence(db).catch((error) => {
-    if (error.code === 'failed-precondition') {
-      console.warn('Firestore persistence failed: multiple tabs open on same origin.')
-    } else if (error.code === 'unimplemented') {
-      console.warn('Firestore persistence is not available on this browser.')
-    }
-  })
 }
 
 export const ensureAnonymousAuth = async () => {

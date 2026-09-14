@@ -30,6 +30,15 @@ const parkOptions = {
   universal: ['Epic', 'Adventure', 'Studio'],
   disney: ['Magic Kingdom', 'EPCOT', 'Hollywood Studio', 'Animal Kingdom'],
 } as const
+const parkLabelColors: Record<string, string> = {
+  Epic: 'bg-violet-100 text-violet-800',
+  Adventure: 'bg-teal-100 text-teal-800',
+  Studio: 'bg-orange-100 text-orange-800',
+  'Magic Kingdom': 'bg-pink-100 text-pink-800',
+  EPCOT: 'bg-blue-100 text-blue-800',
+  'Hollywood Studio': 'bg-amber-100 text-amber-800',
+  'Animal Kingdom': 'bg-lime-100 text-lime-800',
+}
 type BookingMode = 'flight' | 'hotel' | 'car' | 'voucher'
 type FlightInfo = {
   airline: string
@@ -75,7 +84,7 @@ type ParkDayRoute = {
   time: string
   title: string
   area: string
-  type: '景點' | '美食' | '交通' | '休息' | '設施'
+  type: '景點' | '設施' | '交通' | '美食' | '住宿' | '休息'
   rating?: number
   note: string
 }
@@ -651,11 +660,10 @@ const emptyScheduleItem: ScheduleItem = {
 }
 
 function StarRating({ value, onChange }: { value: number; onChange?: (rating: number) => void }) {
-  return <div className="flex flex-wrap items-center" role="group" aria-label="設施評分">
+  return <div className="flex flex-wrap items-center" role="group" aria-label={value ? `設施評分：${value} 星` : '設施評分：尚未評分'}>
     {[1, 2, 3, 4, 5].map((star) => onChange
       ? <button key={star} type="button" className={`rating-star ${star <= value ? 'is-rated' : ''}`} aria-label={`${star} 星`} aria-pressed={star === value} onClick={() => onChange(star)}>★</button>
       : <span key={star} aria-hidden="true" className={`rating-star ${star <= value ? 'is-rated' : ''}`}>★</span>)}
-    <span className="ml-2 text-xs text-muted">{value ? `${value} / 5` : '尚未評分'}</span>
   </div>
 }
 
@@ -680,8 +688,8 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('schedule')
   const [selectedDate, setSelectedDate] = useState('11/4')
-  const [selectedParkId, setSelectedParkId] = useState<'disney' | 'universal'>('disney')
-  const [selectedParkDayId, setSelectedParkDayId] = useState('disney-day-1')
+  const [selectedParkId, setSelectedParkId] = useState<'disney' | 'universal'>('universal')
+  const [selectedParkDayId, setSelectedParkDayId] = useState('universal-day-1')
   const [bookingMode, setBookingMode] = useState<BookingMode>('flight')
   const [expandedFlightIndex, setExpandedFlightIndex] = useState<number | null>(null)
   const [preparationMode, setPreparationMode] = useState('待辦')
@@ -743,7 +751,7 @@ function App() {
 
   useEffect(() => {
     if (!tripData.parkSections.some((park) => park.id === selectedParkId)) {
-      setSelectedParkId(tripData.parkSections[0]?.id ?? 'disney')
+      setSelectedParkId(tripData.parkSections.find((park) => park.id === 'universal')?.id ?? tripData.parkSections[0]?.id ?? 'universal')
     }
   }, [selectedParkId, tripData.parkSections])
 
@@ -1094,7 +1102,7 @@ function App() {
         title: dataDraft.title.trim(),
         park: parkOptions[dataEditor.parkId].find((park) => park === dataDraft.park) ?? '',
         area: dataDraft.area || '',
-        type: (dataDraft.type || '景點') as ParkDayRoute['type'],
+        type: (dataDraft.type || '設施') as ParkDayRoute['type'],
         note: dataDraft.note || '',
         ...(dataDraft.type === '設施' ? { rating: Math.max(0, Math.min(5, Math.round(Number(dataDraft.rating) || 0))) } : {}),
       }
@@ -1337,7 +1345,7 @@ function App() {
         openDataEditor({ kind: 'expense', index: null }, { date: selectedDate, title: '', amount: '', payer: '' })
         break
       case 'park':
-        if (selectedParkDay) openDataEditor({ kind: 'route', index: null, parkId: selectedPark.id, dayId: selectedParkDay.id }, { type: '景點' })
+        if (selectedParkDay) openDataEditor({ kind: 'route', index: null, parkId: selectedPark.id, dayId: selectedParkDay.id }, { type: '設施' })
         break
       case 'planning':
         openDataEditor({ kind: 'task', index: null }, { title: '', assignee: preparationAssignee, done: 'false', mode: preparationMode })
@@ -1514,6 +1522,7 @@ function App() {
                         <DragHandle group="flight" index={sortedFlights.indexOf(flight)} onStart={setDraggingFlightIndex} onOver={setDragOverFlightIndex} onEnd={() => { setDraggingFlightIndex(null); setDragOverFlightIndex(null) }} onMove={reorderFlights} />
                     <button
                       type="button"
+                      data-drag-surface
                       onClick={() => setExpandedFlightIndex(expandedFlightIndex === index ? null : index)}
                       aria-expanded={expandedFlightIndex === index}
                       aria-label={flight === nextFlight ? `${flight.flightNumber}，最近即將出發航班` : undefined}
@@ -1764,10 +1773,6 @@ function App() {
               </div>
             </section>
 
-            <section className="soft-card section-info p-4">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{selectedPark.name}</p>
-            </section>
-
             <section className="mb-5">
               <div className="flex gap-2 overflow-x-auto pb-2">
                 {selectedPark.days.map((day) => (
@@ -1795,6 +1800,7 @@ function App() {
                       交通: 'bg-sky-100 text-sky-700',
                       休息: 'bg-violet-100 text-violet-700',
                       設施: 'bg-amber-100 text-amber-700',
+                      住宿: 'bg-rose-100 text-rose-700',
                     }
 
                     return (
@@ -1807,7 +1813,10 @@ function App() {
                         className={`category-card schedule-item draggable-card flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingRouteIndex === index ? 'dragging-card' : ''} ${dragOverRouteIndex === index ? 'drag-over-card' : ''}`}
                       >
                         <DragHandle group="route" index={index} onStart={setDraggingRouteIndex} onOver={setDragOverRouteIndex} onEnd={() => { setDraggingRouteIndex(null); setDragOverRouteIndex(null) }} onMove={reorderParkRoutes} />
-                      <span className={`label-chip category-edge-label ${colorMap[route.type]}`}>{route.type}</span>
+                        <div className="category-edge-label flex items-center gap-1.5">
+                          <span className={`label-chip shrink-0 ${colorMap[route.type]}`}>{route.type}</span>
+                          {route.park && <span className={`label-chip min-w-0 normal-case tracking-normal ${parkLabelColors[route.park] ?? 'bg-slate-100 text-slate-700'}`}>{route.park}</span>}
+                        </div>
                         <div className="flex w-14 flex-col items-center pt-1">
                           <div className="text-[11px] font-black text-muted">{route.time}</div>
                           <div className="mt-2 h-8 w-px bg-olive/20" />
@@ -1818,14 +1827,13 @@ function App() {
                             <div className="font-black text-ink">{route.title}</div>
                             <button
                               type="button"
-                              onClick={() => openDataEditor({ kind: 'route', index, parkId: selectedPark.id, dayId: selectedParkDay.id }, { time: route.time, title: route.title, park: route.park ?? '', area: route.area, type: route.type, note: route.note, rating: String(route.rating ?? 0) })}
+                              onClick={() => openDataEditor({ kind: 'route', index, parkId: selectedPark.id, dayId: selectedParkDay.id }, { time: route.time, title: route.title, park: route.park ?? '', area: route.area, type: route.type === '景點' ? '設施' : route.type, note: route.note, rating: String(route.rating ?? 0) })}
                               className="shrink-0 text-[10px] font-black text-olive"
                             >
                               編輯
                             </button>
                           </div>
                           
-                          {route.park && <div className="mt-1 text-xs font-bold text-muted">{route.park}</div>}
                           <div className="mt-1 flex items-center gap-2 text-sm text-[#292524]">{route.area}</div>
                           {route.type === '設施' && <StarRating value={route.rating ?? 0} />}
                           <div className="mt-2 text-xs leading-5 text-ink/70">{route.note}</div>
@@ -2224,7 +2232,7 @@ function App() {
                   <>
                     <div className="grid grid-cols-2 gap-3">
                       <label className="text-xs font-bold text-muted">時間<input value={dataDraft.time ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, time: event.target.value })} className="form-field" /></label>
-                      <label className="text-xs font-bold text-muted">類型<select value={dataDraft.type ?? '景點'} onChange={(event) => setDataDraft({ ...dataDraft, type: event.target.value })} className="form-field"><option>景點</option><option>美食</option><option>交通</option><option>休息</option><option>設施</option></select></label>
+                      <label className="text-xs font-bold text-muted">類型<select value={dataDraft.type ?? '設施'} onChange={(event) => setDataDraft({ ...dataDraft, type: event.target.value })} className="form-field"><option>設施</option><option>交通</option><option>美食</option><option>住宿</option><option>休息</option></select></label>
                     </div>
                     <label className="block text-xs font-bold text-muted">園區
                       <select value={dataDraft.park ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, park: event.target.value })} className="form-field">

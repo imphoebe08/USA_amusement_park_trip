@@ -51,6 +51,10 @@ function setup(saveResult = true) {
   return {
     card, target, body, starts, moves, animations,
     get ghost() { return ghost },
+    mouseDown: (target = card, button = 0) => events.get('card:mousedown')({ target, button, clientX: 20, clientY: 30, preventDefault() {} }),
+    mouseMove: (x, y) => events.get('document:mousemove')({ clientX: x, clientY: y }),
+    mouseUp: () => events.get('document:mouseup')(),
+    click: () => { let prevented = false; events.get('card:click')({ preventDefault() { prevented = true }, stopPropagation() {} }); return prevented },
     start: () => events.get('card:touchstart')({ target: card, touches: [touch()], changedTouches: [touch()] }),
     move: (x, y) => { let prevented = false; events.get('document:touchmove')({ touches: [touch(x, y)], cancelable: true, preventDefault() { prevented = true } }); return prevented },
     end: (cancelled = false) => events.get('document:touchend')({ type: cancelled ? 'touchcancel' : 'touchend', changedTouches: [touch()], cancelable: true, preventDefault() {} }),
@@ -92,3 +96,39 @@ for (const scenario of ['save failure', 'cancel', 'outside']) {
     } finally { ui.cleanup() }
   })
 }
+
+
+test('desktop mouse movement starts dragging immediately and saves on release', async () => {
+  const ui = setup()
+  try {
+    ui.mouseDown(); assert.equal(ui.starts.length, 0)
+    ui.hit(ui.target); ui.mouseMove(40, 230)
+    assert.deepEqual(ui.starts, [0]); assert.ok(ui.target.classes.has('drop-zone-active'))
+    ui.mouseUp(); await wait(30)
+    assert.deepEqual(ui.moves, [[1, 0]]); assert.ok(ui.ghost.removed)
+    assert.equal(ui.click(), true)
+  } finally { ui.cleanup() }
+})
+
+test('desktop click and small movements do not reorder or swallow the click', () => {
+  const ui = setup()
+  try {
+    ui.mouseDown(); ui.mouseMove(22, 32); ui.mouseUp()
+    assert.equal(ui.starts.length, 0); assert.equal(ui.moves.length, 0)
+    assert.equal(ui.click(), false)
+  } finally { ui.cleanup() }
+})
+
+test('desktop dragging on a flight summary works but ordinary controls are excluded', async () => {
+  const ui = setup()
+  try {
+    const control = Object.create(ui.card)
+    control.closest = () => control
+    control.hasAttribute = () => false
+    ui.mouseDown(control); ui.mouseMove(40, 230)
+    assert.equal(ui.starts.length, 0)
+    control.hasAttribute = name => name === 'data-drag-surface'
+    ui.mouseDown(control); ui.hit(ui.target); ui.mouseMove(40, 230); ui.mouseUp()
+    await wait(30); assert.deepEqual(ui.moves, [[1, 0]])
+  } finally { ui.cleanup() }
+})

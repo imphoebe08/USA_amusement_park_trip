@@ -19,6 +19,7 @@ export function DragHandle(props: Props) {
     const card = anchor.current!.closest<HTMLElement>('[data-drag-group]')!
     let timer = 0
     let frame = 0
+    let mouseGesture = false
     let pending = false
     let active = false
     let settling = false
@@ -75,46 +76,52 @@ export function DragHandle(props: Props) {
       locate()
       frame = requestAnimationFrame(follow)
     }
-    const begin = (eventTarget: EventTarget | null, nextX: number, nextY: number) => {
+    const lift = () => {
+      if (!pending || document.body.dataset.dragOwner) return
+      pending = false
+      active = true
+      document.body.dataset.dragOwner = owner
+      document.body.classList.add('is-dragging')
+      const rect = card.getBoundingClientRect()
+      left = rect.left
+      top = rect.top
+      preview = card.cloneNode(true) as HTMLElement
+      preview.removeAttribute('id')
+      preview.removeAttribute('data-drag-group')
+      preview.removeAttribute('data-drag-index')
+      preview.querySelectorAll('[id]').forEach((element) => element.removeAttribute('id'))
+      preview.setAttribute('aria-hidden', 'true')
+      preview.inert = true
+      preview.classList.remove('dragging-card', 'drag-over-card')
+      preview.classList.add('drag-preview')
+      Object.assign(preview.style, { left: `${left}px`, top: `${top}px`, width: `${rect.width}px`, height: `${rect.height}px` })
+      document.body.append(preview)
+      preview.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.035)' }], { duration: duration(), easing: 'ease-out' })
+      card.classList.add('drag-source')
+      callbacks.current.onStart(props.index)
+      navigator.vibrate?.(20)
+      follow()
+    }
+    const begin = (eventTarget: EventTarget | null, nextX: number, nextY: number, mouse = false) => {
       if (pending || active || settling || document.body.dataset.dragOwner) return
       const element = eventTarget instanceof Element ? eventTarget : null
-      if (element?.closest('button, a, input, select, textarea, [contenteditable="true"]')) return
+      const control = element?.closest('button, a, input, select, textarea, [contenteditable="true"]')
+      if (control && !control.hasAttribute('data-drag-surface')) return
       pending = true
+      mouseGesture = mouse
       startX = x = nextX
       startY = y = nextY
-      timer = window.setTimeout(() => {
-        if (!pending || document.body.dataset.dragOwner) return
-        pending = false
-        active = true
-        document.body.dataset.dragOwner = owner
-        document.body.classList.add('is-dragging')
-        const rect = card.getBoundingClientRect()
-        left = rect.left
-        top = rect.top
-        preview = card.cloneNode(true) as HTMLElement
-        preview.removeAttribute('id')
-        preview.removeAttribute('data-drag-group')
-        preview.removeAttribute('data-drag-index')
-        preview.querySelectorAll('[id]').forEach((element) => element.removeAttribute('id'))
-        preview.setAttribute('aria-hidden', 'true')
-        preview.inert = true
-        preview.classList.remove('dragging-card', 'drag-over-card')
-        preview.classList.add('drag-preview')
-        Object.assign(preview.style, { left: `${left}px`, top: `${top}px`, width: `${rect.width}px`, height: `${rect.height}px` })
-        document.body.append(preview)
-        preview.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.035)' }], { duration: duration(), easing: 'ease-out' })
-        card.classList.add('drag-source')
-        callbacks.current.onStart(props.index)
-        navigator.vibrate?.(20)
-        follow()
-      }, 380)
+      if (!mouse) timer = window.setTimeout(lift, 380)
     }
     const move = (nextX: number, nextY: number) => {
       x = nextX
       y = nextY
       if (pending && Math.hypot(x - startX, y - startY) > 8) {
-        clearTimeout(timer)
-        pending = false
+        if (mouseGesture) lift()
+        else {
+          clearTimeout(timer)
+          pending = false
+        }
       }
     }
     const finish = async (cancelled: boolean) => {
@@ -183,10 +190,12 @@ export function DragHandle(props: Props) {
       void finish(event.type === 'touchcancel')
     }
     const mouseDown = (event: MouseEvent) => {
-      if (event.button === 0) begin(event.target, event.clientX, event.clientY)
+      if (event.button !== 0 || touchId !== null) return
+      begin(event.target, event.clientX, event.clientY, true)
+      if (pending && mouseGesture) event.preventDefault()
     }
-    const mouseMove = (event: MouseEvent) => move(event.clientX, event.clientY)
-    const mouseUp = () => { void finish(false) }
+    const mouseMove = (event: MouseEvent) => { if (mouseGesture) move(event.clientX, event.clientY) }
+    const mouseUp = () => { if (mouseGesture) void finish(false) }
     const cancel = () => { void finish(true) }
     const keyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') cancel() }
     const preventNativeDrag = (event: Event) => event.preventDefault()

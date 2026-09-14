@@ -21,7 +21,7 @@ html {
 
 body {
   margin: 0;
-  min-width: 320px;
+  min-width: 0;
   min-height: 100vh;
   background: #f7f4eb;
 }
@@ -325,7 +325,7 @@ html[data-theme='dark'] .completed-task button[aria-label='編輯待辦'] {
   position: relative;
 }
 .rating-star:focus-visible { outline: 2px solid #68734d; outline-offset: 2px; }
-.rating-star { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 32px; font-size: 20px; color: #d1d5db; }
+.rating-star { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 28px; font-size: 16px; color: #d1d5db; }
 .rating-star.is-rated { color: #b77912; }
 
 /* The source remains in layout while the lifted copy follows the finger. */
@@ -366,4 +366,16 @@ html[data-theme='dark'] .drop-zone-active { background-color: #34452c !important
 @media (prefers-reduced-motion: reduce) {
   .draggable-card { transition: none; }
   .drag-preview { transform: none; }
+}
+
+/* Keep overflow within the viewport; date/tab rows retain their own scrolling. */
+html, body, #root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
+  overscroll-behavior-x: none;
+}
+#root .flex > .flex-1, #root .grid > * { min-width: 0; }
+@media (max-width: 640px) {
+  input, select, textarea { font-size: 16px !important; }
 }
