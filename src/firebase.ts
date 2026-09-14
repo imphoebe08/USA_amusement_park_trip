@@ -1,10 +1,11 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app'
 import { getAnalytics, isSupported, type Analytics } from 'firebase/analytics'
-import { connectAuthEmulator, getAuth, signInAnonymously, type Auth } from 'firebase/auth'
+import { connectAuthEmulator, getAuth, signInAnonymously, type Auth, type User } from 'firebase/auth'
 import {
   connectFirestoreEmulator,
   initializeFirestore,
   persistentLocalCache,
+  persistentMultipleTabManager,
   type Firestore,
 } from 'firebase/firestore'
 import { getStorage, type FirebaseStorage } from 'firebase/storage'
@@ -31,7 +32,7 @@ export const app: FirebaseApp | null = isFirebaseConfigured
 
 export const auth: Auth | null = app ? getAuth(app) : null
 export const db: Firestore | null = app
-  ? initializeFirestore(app, { localCache: persistentLocalCache() })
+  ? initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) })
   : null
 export const storage: FirebaseStorage | null = app ? getStorage(app) : null
 export let analytics: Analytics | null = null
@@ -59,23 +60,30 @@ if (app && auth && db && import.meta.env.DEV) {
   }
 }
 
-export const ensureAnonymousAuth = async () => {
-  if (!auth) {
-    return null
-  }
+let signInRequest: Promise<User> | null = null
 
+export const ensureAnonymousAuth = async () => {
+  if (!auth) return null
+
+  // Wait for the saved session before creating a new anonymous user.
+  await auth.authStateReady()
   if (auth.currentUser) {
+    // Refresh only if the SDK determines the token is expired or near expiry.
+    await auth.currentUser.getIdToken()
     return auth.currentUser
   }
 
+  if (!signInRequest) {
+    signInRequest = signInAnonymously(auth).then((result) => result.user).finally(() => {
+      signInRequest = null
+    })
+  }
   try {
-    const result = await signInAnonymously(auth)
-    return result.user
+    return await signInRequest
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'auth/configuration-not-found') {
       throw new Error('Firebase Anonymous Authentication 尚未啟用，請在 Firebase Console 開啟 Anonymous sign-in。')
     }
-
     throw error
   }
 }

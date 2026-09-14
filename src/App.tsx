@@ -292,8 +292,10 @@ const uploadCertificate = async (file: File) => {
 const getFirebaseErrorMessage = (error: unknown, fallback: string) => {
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
   if (code.includes('permission-denied')) {
-    return 'Firebase 拒絕寫入：請確認已啟用 Anonymous Authentication，且 Firestore Rules 允許 request.auth。'
+    return 'Firebase 拒絕存取（permission-denied）：請確認雲端已部署的 Firestore Rules 允許目前登入者存取。'
   }
+  if (code.includes('unavailable') || code.includes('network-request-failed')) return '目前無法連上 Firebase，請檢查網路或 VPN 後重試。'
+  if (code.includes('unauthenticated') || code.includes('user-token-expired')) return 'Firebase 登入驗證失敗，請重新整理頁面後再試。'
   if (error instanceof Error && error.message) return error.message
   return fallback
 }
@@ -619,27 +621,33 @@ const removeUndefined = <T,>(value: T): T => {
   return value
 }
 
+let hasLoadedTripData = false
+
 const getTripDataFromFirebase = async (): Promise<TripData> => {
-  if (!db) {
-    return localTripData
+  if (!db) throw new Error('Firebase 尚未設定，無法讀取雲端行程。')
+
+  const firestore = db
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const snapshot = await Promise.race([
+      (async () => {
+        await ensureAnonymousAuth()
+        return getDoc(doc(firestore, 'trip', 'orlando-escape'))
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Firebase 連線超過 20 秒，尚未讀取到行程。請確認網路或 VPN 狀態後按「重新讀取」。')), 20000)
+      }),
+    ])
+    if (!snapshot.exists() && snapshot.metadata.fromCache) {
+      throw new Error('目前無法連上 Firebase，且沒有已快取的行程。請恢復連線後重新讀取。')
+    }
+    // A missing server document can use defaults, but a failed read must never seed them.
+    const data = snapshot.exists() ? normalizeTripData(snapshot.data() as Partial<TripData>) : localTripData
+    hasLoadedTripData = true
+    return data
+  } finally {
+    clearTimeout(timer)
   }
-
-  await ensureAnonymousAuth()
-
-  const docRef = doc(db, 'trip', 'orlando-escape')
-  const snapshot = await Promise.race([
-    getDoc(docRef),
-    new Promise<never>((_, reject) => {
-      window.setTimeout(() => reject(new Error('Firestore request timed out.')), 4000)
-    }),
-  ])
-
-  if (!snapshot.exists()) {
-    await setDoc(docRef, removeUndefined(localTripData))
-    return localTripData
-  }
-
-  return normalizeTripData(snapshot.data() as Partial<TripData>)
 }
 
 const saveTripDataToFirebase = async (tripData: TripData) => {
@@ -647,6 +655,8 @@ const saveTripDataToFirebase = async (tripData: TripData) => {
     throw new Error('Firebase is not configured.')
   }
 
+  if (!hasLoadedTripData) throw new Error('尚未成功讀取雲端行程，請先重新讀取再儲存。')
+  if (!navigator.onLine) throw new Error('目前沒有網路連線，請連線後再儲存；編輯內容仍保留在視窗中。')
   await ensureAnonymousAuth()
   await setDoc(doc(db, 'trip', 'orlando-escape'), removeUndefined(tripData))
 }
@@ -684,7 +694,9 @@ function App() {
   }, [theme])
 
   const [tripData, setTripData] = useState<TripData>(localTripData)
-  const [isLoading, setIsLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('schedule')
   const [selectedDate, setSelectedDate] = useState('11/4')
@@ -721,13 +733,14 @@ function App() {
         const data = await getTripDataFromFirebase()
         if (!isCancelled) {
           setTripData(data)
+          setLoadFailed(false)
           setErrorMessage(null)
         }
       } catch (error) {
         console.error('Failed to load Firestore trip data:', error)
         if (!isCancelled) {
           setErrorMessage(getFirebaseErrorMessage(error, 'Firebase 資料讀取失敗'))
-          setTripData(localTripData)
+          setLoadFailed(true)
         }
       } finally {
         if (!isCancelled) {
@@ -741,7 +754,7 @@ function App() {
     return () => {
       isCancelled = true
     }
-  }, [])
+  }, [loadAttempt])
 
   useEffect(() => {
     if (!tripData.dayPlans.some((day) => day.date === selectedDate)) {
@@ -1369,6 +1382,15 @@ function App() {
       )
     }
 
+    if (loadFailed) {
+      return <main className="px-4 pb-6">
+        <section className="soft-card space-y-3 p-4 text-sm text-muted">
+          <p>尚未讀取到行程，請確認連線後重試。</p>
+          <button type="button" className="rounded-full bg-olive px-4 py-2 font-bold text-white" onClick={() => { setIsLoading(true); setErrorMessage(null); setLoadAttempt((attempt) => attempt + 1) }}>重新讀取</button>
+        </section>
+      </main>
+    }
+
     return (
       <main className="px-4 pb-6">
         {activeTab === 'schedule' && (
@@ -1958,9 +1980,12 @@ function App() {
       <div className="mx-auto min-h-screen max-w-md bg-sand pb-44">
         <header className="px-4 pb-3 pt-5">
           <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted">Florida trip</p>
-              <h1 className="mt-1 text-2xl font-black tracking-[-0.03em] text-ink">Orlando Escape</h1>
+            <div className="flex min-w-0 items-center gap-3">
+              <img src="/app-icons/icon-192.png" alt="APSE 手繪旅行圖示" width={52} height={52} className="h-[52px] w-[52px] shrink-0 rounded-2xl" />
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-muted">Florida trip</p>
+                <h1 className="mt-1 text-2xl font-black tracking-[-0.03em] text-ink">Orlando Escape</h1>
+              </div>
             </div>
             <button
               type="button"
@@ -2282,7 +2307,7 @@ function App() {
           </div>
         )}
 
-        {!isLoading && !editingItem && !dataEditor && !previewAttachment && (activeTab !== 'park' || selectedParkDay) && (
+        {!isLoading && !loadFailed && !editingItem && !dataEditor && !previewAttachment && (activeTab !== 'park' || selectedParkDay) && (
           <div className="pointer-events-none fixed inset-x-0 bottom-24 z-10 mx-auto flex max-w-md justify-end px-4">
             <button
               type="button"
