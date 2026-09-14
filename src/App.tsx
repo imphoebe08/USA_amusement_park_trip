@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
@@ -69,7 +69,8 @@ type ParkDayRoute = {
   time: string
   title: string
   area: string
-  type: '景點' | '美食' | '交通' | '休息'
+  type: '景點' | '美食' | '交通' | '休息' | '設施'
+  rating?: number
   note: string
 }
 
@@ -643,6 +644,78 @@ const emptyScheduleItem: ScheduleItem = {
   note: '',
 }
 
+function DragHandle({ group, index, onStart, onOver, onEnd, onMove }: {
+  group: string
+  index: number
+  onStart: (index: number) => void
+  onOver: (index: number | null) => void
+  onEnd: () => void
+  onMove: (target: number, source: number) => Promise<void>
+}) {
+  const gesture = useRef<{ pointerId: number; target: number | null; y: number; x: number; frame: number } | null>(null)
+  useEffect(() => () => {
+    if (gesture.current) cancelAnimationFrame(gesture.current.frame)
+  }, [])
+  const locateTarget = () => {
+    const current = gesture.current
+    if (!current) return
+    const card = document.elementFromPoint(current.x, current.y)?.closest<HTMLElement>('[data-drag-group]')
+    current.target = card?.dataset.dragGroup === group ? Number(card.dataset.dragIndex) : null
+    onOver(current.target)
+  }
+  return <button type="button" className="drag-handle" aria-label="拖曳排序" title="按住並拖曳以排序"
+    onDragStart={(event) => { event.preventDefault(); event.stopPropagation() }}
+    onPointerDown={(event) => {
+      if (!event.isPrimary || event.button !== 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      event.currentTarget.setPointerCapture(event.pointerId)
+      gesture.current = { pointerId: event.pointerId, target: index, x: event.clientX, y: event.clientY, frame: 0 }
+      onStart(index)
+      const scroll = () => {
+        const current = gesture.current
+        if (!current) return
+        const edge = 90
+        const speed = current.y < edge ? -10 : current.y > window.innerHeight - edge ? 10 : 0
+        if (speed) { window.scrollBy(0, speed); locateTarget() }
+        current.frame = requestAnimationFrame(scroll)
+      }
+      gesture.current.frame = requestAnimationFrame(scroll)
+    }}
+    onPointerMove={(event) => {
+      if (!gesture.current || gesture.current.pointerId !== event.pointerId) return
+      gesture.current.x = event.clientX
+      gesture.current.y = event.clientY
+      locateTarget()
+    }}
+    onPointerUp={(event) => {
+      const current = gesture.current
+      if (!current || current.pointerId !== event.pointerId) return
+      cancelAnimationFrame(current.frame)
+      gesture.current = null
+      onEnd()
+      if (current.target !== null && current.target !== index) void onMove(current.target, index)
+    }}
+    onLostPointerCapture={() => {
+      if (gesture.current) { cancelAnimationFrame(gesture.current.frame); gesture.current = null; onEnd() }
+    }}
+    onPointerCancel={() => {
+      if (gesture.current) cancelAnimationFrame(gesture.current.frame)
+      gesture.current = null
+      onEnd()
+    }}
+  >⠿</button>
+}
+
+function StarRating({ value, onChange }: { value: number; onChange?: (rating: number) => void }) {
+  return <div className="flex flex-wrap items-center" role="group" aria-label="設施評分">
+    {[1, 2, 3, 4, 5].map((star) => onChange
+      ? <button key={star} type="button" className={`rating-star ${star <= value ? 'is-rated' : ''}`} aria-label={`${star} 星`} aria-pressed={star === value} onClick={() => onChange(star)}>★</button>
+      : <span key={star} aria-hidden="true" className={`rating-star ${star <= value ? 'is-rated' : ''}`}>★</span>)}
+    <span className="ml-2 text-xs text-muted">{value ? `${value} / 5` : '尚未評分'}</span>
+  </div>
+}
+
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
@@ -1079,6 +1152,7 @@ function App() {
         area: dataDraft.area || '',
         type: (dataDraft.type || '景點') as ParkDayRoute['type'],
         note: dataDraft.note || '',
+        ...(dataDraft.type === '設施' ? { rating: Math.max(0, Math.min(5, Math.round(Number(dataDraft.rating) || 0))) } : {}),
       }
       const parkSections = tripData.parkSections.map((park) => {
         if (park.id !== dataEditor.parkId) return park
@@ -1172,12 +1246,12 @@ function App() {
     }
   }
 
-  const reorderScheduleItems = async (targetIndex: number) => {
-    if (draggingScheduleIndex === null || draggingScheduleIndex === targetIndex) return
+  const reorderScheduleItems = async (targetIndex: number, source: number | null = draggingScheduleIndex) => {
+    if (source === null || source === targetIndex) return
     const nextDayPlans = tripData.dayPlans.map((day) => {
       if (day.date !== selectedPlan.date) return day
       const items = [...day.items]
-      const [movedItem] = items.splice(draggingScheduleIndex, 1)
+      const [movedItem] = items.splice(source, 1)
       items.splice(targetIndex, 0, movedItem)
       return { ...day, items }
     })
@@ -1194,8 +1268,8 @@ function App() {
     }
   }
 
-  const reorderParkRoutes = async (targetIndex: number) => {
-    if (draggingRouteIndex === null || draggingRouteIndex === targetIndex || !selectedParkDay) return
+  const reorderParkRoutes = async (targetIndex: number, source: number | null = draggingRouteIndex) => {
+    if (source === null || source === targetIndex || !selectedParkDay) return
     const parkSections = tripData.parkSections.map((park) => {
       if (park.id !== selectedPark.id) return park
       return {
@@ -1203,7 +1277,7 @@ function App() {
         days: park.days.map((day) => {
           if (day.id !== selectedParkDay.id) return day
           const routes = [...day.routes]
-          const [movedRoute] = routes.splice(draggingRouteIndex, 1)
+          const [movedRoute] = routes.splice(source, 1)
           routes.splice(targetIndex, 0, movedRoute)
           return { ...day, routes }
         }),
@@ -1222,17 +1296,17 @@ function App() {
     }
   }
 
-  const reorderBookingCards = async (targetIndex: number) => {
-    if (draggingBookingIndex === null || draggingBookingIndex === targetIndex) return
+  const reorderBookingCards = async (targetIndex: number, source: number | null = draggingBookingIndex) => {
+    if (source === null || source === targetIndex) return
     const visibleCards = visibleBookingCards
-    const sourceCard = visibleCards[draggingBookingIndex]
+    const sourceCard = visibleCards[source]
     const targetCard = visibleCards[targetIndex]
     if (!sourceCard || !targetCard) return
     const sourceIndex = bookingCards.indexOf(sourceCard)
     const targetOriginalIndex = bookingCards.indexOf(targetCard)
     const nextCards = [...bookingCards]
     nextCards.splice(sourceIndex, 1)
-    nextCards.splice(sourceIndex < targetOriginalIndex ? targetOriginalIndex - 1 : targetOriginalIndex, 0, sourceCard)
+    nextCards.splice(targetOriginalIndex, 0, sourceCard)
     const nextTripData = { ...tripData, bookingCards: nextCards }
     setDraggingBookingIndex(null)
     setDragOverBookingIndex(null)
@@ -1246,16 +1320,16 @@ function App() {
     }
   }
 
-  const reorderFlights = async (targetIndex: number) => {
-    if (draggingFlightIndex === null || draggingFlightIndex === targetIndex) return
-    const sourceFlight = sortedFlights[draggingFlightIndex]
+  const reorderFlights = async (targetIndex: number, source: number | null = draggingFlightIndex) => {
+    if (source === null || source === targetIndex) return
+    const sourceFlight = sortedFlights[source]
     const targetFlight = sortedFlights[targetIndex]
     if (!sourceFlight || !targetFlight) return
     const sourceIndex = tripData.flightInfo.indexOf(sourceFlight)
     const targetOriginalIndex = tripData.flightInfo.indexOf(targetFlight)
     const nextFlights = [...tripData.flightInfo]
     nextFlights.splice(sourceIndex, 1)
-    nextFlights.splice(sourceIndex < targetOriginalIndex ? targetOriginalIndex - 1 : targetOriginalIndex, 0, sourceFlight)
+    nextFlights.splice(targetOriginalIndex, 0, sourceFlight)
     const nextTripData = { ...tripData, flightInfo: nextFlights }
     setDraggingFlightIndex(null)
     setDragOverFlightIndex(null)
@@ -1269,17 +1343,17 @@ function App() {
     }
   }
 
-  const reorderPlanningTasks = async (targetIndex: number) => {
-    if (draggingTaskIndex === null || draggingTaskIndex === targetIndex) return
+  const reorderPlanningTasks = async (targetIndex: number, source: number | null = draggingTaskIndex) => {
+    if (source === null || source === targetIndex) return
     const visibleTasks = visiblePlanningTasks
-    const sourceTask = visibleTasks[draggingTaskIndex]
+    const sourceTask = visibleTasks[source]
     const targetTask = visibleTasks[targetIndex]
     if (!sourceTask || !targetTask) return
     const sourceIndex = planningTasks.indexOf(sourceTask)
     const targetOriginalIndex = planningTasks.indexOf(targetTask)
     const nextTasks = [...planningTasks]
     nextTasks.splice(sourceIndex, 1)
-    nextTasks.splice(sourceIndex < targetOriginalIndex ? targetOriginalIndex - 1 : targetOriginalIndex, 0, sourceTask)
+    nextTasks.splice(targetOriginalIndex, 0, sourceTask)
     const nextTripData = { ...tripData, planningTasks: nextTasks }
     setDraggingTaskIndex(null)
     setDragOverTaskIndex(null)
@@ -1402,13 +1476,13 @@ function App() {
                   return (
                     <div
                       key={`${item.time}-${item.title}`}
-                      draggable
-                      onDragStart={() => setDraggingScheduleIndex(index)}
+                      data-drag-group="schedule" data-drag-index={index} draggable onDragStart={() => setDraggingScheduleIndex(index)}
                       onDragOver={(event) => { event.preventDefault(); setDragOverScheduleIndex(index) }}
                       onDrop={() => void reorderScheduleItems(index)}
                       onDragEnd={() => { setDraggingScheduleIndex(null); setDragOverScheduleIndex(null) }}
                       className={`category-card schedule-item draggable-card flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingScheduleIndex === index ? 'dragging-card' : ''} ${dragOverScheduleIndex === index ? 'drag-over-card' : ''}`}
                     >
+                        <DragHandle group="schedule" index={index} onStart={setDraggingScheduleIndex} onOver={setDragOverScheduleIndex} onEnd={() => { setDraggingScheduleIndex(null); setDragOverScheduleIndex(null) }} onMove={reorderScheduleItems} />
                       <span className={`label-chip category-edge-label ${categoryStyle}`}>{item.category}</span>
                       <div className="flex w-14 flex-col items-center pt-1">
                         <div className="text-[11px] font-black text-muted">{item.time}</div>
@@ -1482,7 +1556,8 @@ function App() {
                         <div className="h-px flex-1 bg-muted/40" />
                       </div>
                     )}
-                  <div draggable onDragStart={() => setDraggingFlightIndex(sortedFlights.indexOf(flight))} onDragOver={(event) => { event.preventDefault(); setDragOverFlightIndex(sortedFlights.indexOf(flight)) }} onDrop={() => void reorderFlights(sortedFlights.indexOf(flight))} onDragEnd={() => { setDraggingFlightIndex(null); setDragOverFlightIndex(null) }} className={`draggable-card rounded-[20px] ${draggingFlightIndex === sortedFlights.indexOf(flight) ? 'dragging-card' : ''} ${dragOverFlightIndex === sortedFlights.indexOf(flight) ? 'drag-over-card' : ''}`}>
+                  <div data-drag-group="flight" data-drag-index={sortedFlights.indexOf(flight)} draggable onDragStart={() => setDraggingFlightIndex(sortedFlights.indexOf(flight))} onDragOver={(event) => { event.preventDefault(); setDragOverFlightIndex(sortedFlights.indexOf(flight)) }} onDrop={() => void reorderFlights(sortedFlights.indexOf(flight))} onDragEnd={() => { setDraggingFlightIndex(null); setDragOverFlightIndex(null) }} className={`draggable-card rounded-[20px] ${draggingFlightIndex === sortedFlights.indexOf(flight) ? 'dragging-card' : ''} ${dragOverFlightIndex === sortedFlights.indexOf(flight) ? 'drag-over-card' : ''}`}>
+                        <DragHandle group="flight" index={sortedFlights.indexOf(flight)} onStart={setDraggingFlightIndex} onOver={setDragOverFlightIndex} onEnd={() => { setDraggingFlightIndex(null); setDragOverFlightIndex(null) }} onMove={reorderFlights} />
                     <button
                       type="button"
                       onClick={() => setExpandedFlightIndex(expandedFlightIndex === index ? null : index)}
@@ -1595,7 +1670,8 @@ function App() {
                           <div className="h-px flex-1 bg-muted/40" />
                         </div>
                       )}
-                    <div draggable onDragStart={() => setDraggingBookingIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverBookingIndex(visibleIndex) }} onDrop={() => void reorderBookingCards(visibleIndex)} onDragEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} className={`category-card draggable-card cursor-grab active:cursor-grabbing ${bookingMode === 'hotel' ? 'schedule-item mb-4 last:mb-0 flex gap-3 rounded-[22px] p-3' : 'booking-card soft-card mb-3 p-4'} ${isExpired ? 'opacity-45 grayscale' : ''} ${draggingBookingIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverBookingIndex === visibleIndex ? 'drag-over-card' : ''}`}>
+                    <div data-drag-group="booking" data-drag-index={visibleIndex} draggable onDragStart={() => setDraggingBookingIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverBookingIndex(visibleIndex) }} onDrop={() => void reorderBookingCards(visibleIndex)} onDragEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} className={`category-card draggable-card cursor-grab active:cursor-grabbing ${bookingMode === 'hotel' ? 'schedule-item mb-4 last:mb-0 flex gap-3 rounded-[22px] p-3' : 'booking-card soft-card mb-3 p-4'} ${isExpired ? 'opacity-45 grayscale' : ''} ${draggingBookingIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverBookingIndex === visibleIndex ? 'drag-over-card' : ''}`}>
+                        <DragHandle group="booking" index={visibleIndex} onStart={setDraggingBookingIndex} onOver={setDragOverBookingIndex} onEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} onMove={reorderBookingCards} />
                       <span className={`label-chip category-edge-label ${bookingMode === 'hotel' ? 'bg-violet-100 text-violet-700' : card.accent}`}>{card.label}</span>
                       {bookingMode === 'hotel' && (
                         <div className="flex w-14 shrink-0 flex-col items-center pt-1 text-center">
@@ -1765,18 +1841,19 @@ function App() {
                       美食: 'bg-orange-100 text-orange-700',
                       交通: 'bg-sky-100 text-sky-700',
                       休息: 'bg-violet-100 text-violet-700',
+                      設施: 'bg-amber-100 text-amber-700',
                     }
 
                     return (
                       <div
                         key={`${selectedParkDay.id}-${route.time}-${route.title}`}
-                        draggable
-                        onDragStart={() => setDraggingRouteIndex(index)}
+                        data-drag-group="route" data-drag-index={index} draggable onDragStart={() => setDraggingRouteIndex(index)}
                         onDragOver={(event) => { event.preventDefault(); setDragOverRouteIndex(index) }}
                         onDrop={() => void reorderParkRoutes(index)}
                         onDragEnd={() => { setDraggingRouteIndex(null); setDragOverRouteIndex(null) }}
                         className={`category-card schedule-item draggable-card flex cursor-grab gap-3 rounded-[22px] p-3 active:cursor-grabbing ${draggingRouteIndex === index ? 'dragging-card' : ''} ${dragOverRouteIndex === index ? 'drag-over-card' : ''}`}
                       >
+                        <DragHandle group="route" index={index} onStart={setDraggingRouteIndex} onOver={setDragOverRouteIndex} onEnd={() => { setDraggingRouteIndex(null); setDragOverRouteIndex(null) }} onMove={reorderParkRoutes} />
                       <span className={`label-chip category-edge-label ${colorMap[route.type]}`}>{route.type}</span>
                         <div className="flex w-14 flex-col items-center pt-1">
                           <div className="text-[11px] font-black text-muted">{route.time}</div>
@@ -1788,7 +1865,7 @@ function App() {
                             <div className="font-black text-ink">{route.title}</div>
                             <button
                               type="button"
-                              onClick={() => openDataEditor({ kind: 'route', index, parkId: selectedPark.id, dayId: selectedParkDay.id }, { time: route.time, title: route.title, area: route.area, type: route.type, note: route.note })}
+                              onClick={() => openDataEditor({ kind: 'route', index, parkId: selectedPark.id, dayId: selectedParkDay.id }, { time: route.time, title: route.title, area: route.area, type: route.type, note: route.note, rating: String(route.rating ?? 0) })}
                               className="shrink-0 text-[10px] font-black text-olive"
                             >
                               編輯
@@ -1797,6 +1874,7 @@ function App() {
                           
                           <div className="mt-1 flex items-center gap-2 text-sm text-[#292524]">{route.area}</div>
                           <div className="mt-2 text-xs leading-5 text-ink/70">{route.note}</div>
+                          {route.type === '設施' && <StarRating value={route.rating ?? 0} />}
                         </div>
                       </div>
                     )
@@ -1843,7 +1921,8 @@ function App() {
                       <div className="h-px flex-1 bg-muted/40" />
                     </div>
                   )}
-                <section draggable onDragStart={() => setDraggingTaskIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverTaskIndex(visibleIndex) }} onDrop={() => void reorderPlanningTasks(visibleIndex)} onDragEnd={() => { setDraggingTaskIndex(null); setDragOverTaskIndex(null) }} className={`category-card todo-card draggable-card cursor-grab p-4 ${task.done ? 'completed-task' : ''} ${draggingTaskIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverTaskIndex === visibleIndex ? 'drag-over-card' : ''}`}>
+                <section data-drag-group="task" data-drag-index={visibleIndex} draggable onDragStart={() => setDraggingTaskIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverTaskIndex(visibleIndex) }} onDrop={() => void reorderPlanningTasks(visibleIndex)} onDragEnd={() => { setDraggingTaskIndex(null); setDragOverTaskIndex(null) }} className={`category-card todo-card draggable-card cursor-grab p-4 ${task.done ? 'completed-task' : ''} ${draggingTaskIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverTaskIndex === visibleIndex ? 'drag-over-card' : ''}`}>
+                        <DragHandle group="task" index={visibleIndex} onStart={setDraggingTaskIndex} onOver={setDragOverTaskIndex} onEnd={() => { setDraggingTaskIndex(null); setDragOverTaskIndex(null) }} onMove={reorderPlanningTasks} />
                   <span className={`member-color label-chip category-edge-label ${members.find((member) => member.name === task.assignee)?.color || 'bg-slate-200 text-slate-700'}`}>{task.assignee}</span>
                   <div className="flex items-center gap-3">
                     <button type="button" onClick={() => void togglePlanningTask(index)} aria-label={task.done ? '標記為未完成' : '標記為完成'} aria-pressed={task.done} className="flex h-11 w-8 shrink-0 items-center justify-center">
@@ -2191,8 +2270,9 @@ function App() {
                   <>
                     <div className="grid grid-cols-2 gap-3">
                       <label className="text-xs font-bold text-muted">時間<input value={dataDraft.time ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, time: event.target.value })} className="form-field" /></label>
-                      <label className="text-xs font-bold text-muted">類型<select value={dataDraft.type ?? '景點'} onChange={(event) => setDataDraft({ ...dataDraft, type: event.target.value })} className="form-field"><option>景點</option><option>美食</option><option>交通</option><option>休息</option></select></label>
+                      <label className="text-xs font-bold text-muted">類型<select value={dataDraft.type ?? '景點'} onChange={(event) => setDataDraft({ ...dataDraft, type: event.target.value })} className="form-field"><option>景點</option><option>美食</option><option>交通</option><option>休息</option><option>設施</option></select></label>
                     </div>
+                    {dataDraft.type === '設施' && <div><div className="text-xs font-bold text-muted">五星評分</div><StarRating value={Number(dataDraft.rating) || 0} onChange={(rating) => setDataDraft({ ...dataDraft, rating: String(rating) })} /></div>}
                     <label className="block text-xs font-bold text-muted">區域<input value={dataDraft.area ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, area: event.target.value })} className="form-field" /></label>
                     <label className="block text-xs font-bold text-muted">備註<textarea value={dataDraft.note ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, note: event.target.value })} rows={2} className="form-field resize-none" /></label>
                   </>
