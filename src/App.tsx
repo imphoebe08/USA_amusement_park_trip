@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { DragHandle } from './DragHandle'
 import { PullToRefresh } from './PullToRefresh'
+import { getAirportPlace } from './airports'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faCalendarDays,
@@ -42,6 +43,7 @@ const parkLabelColors: Record<string, string> = {
 }
 type BookingMode = 'flight' | 'hotel' | 'car' | 'voucher'
 type FlightInfo = {
+  note?: string
   airline: string
   flightNumber: string
   departureAirport: string
@@ -582,6 +584,7 @@ const normalizeTripData = (value: Partial<TripData> | null | undefined): TripDat
         ...flight,
         confirmationCode: flight.confirmationCode || (flight as FlightInfo & { purchased?: string }).purchased || '',
         purchaser: flight.purchaser || '',
+        note: flight.note || '',
       }))
     : localTripData.flightInfo,
   tripSettings: value?.tripSettings ?? localTripData.tripSettings,
@@ -934,7 +937,7 @@ function App() {
   }
 
   const deleteScheduleItem = async () => {
-    if (!editingItem || editingItem.index === null) {
+    if (isSaving || !editingItem || editingItem.index === null) {
       return
     }
 
@@ -1010,6 +1013,7 @@ function App() {
 
     if (dataEditor.kind === 'flight') {
       const item: FlightInfo = {
+        note: dataDraft.note || '',
         airline: dataDraft.airline || '', flightNumber: dataDraft.flightNumber || '',
         departureAirport: dataDraft.departureAirport || '', departureTime: dataDraft.departureTime || '',
         arrivalAirport: dataDraft.arrivalAirport || '', arrivalTime: dataDraft.arrivalTime || '',
@@ -1163,7 +1167,7 @@ function App() {
   }
 
   const deleteDataEditor = async () => {
-    if (!dataEditor || dataEditor.index === null) return
+    if (isSaving || !dataEditor || dataEditor.index === null || dataEditor.kind === 'tripSettings' || dataEditor.kind === 'parkDay') return
     let nextTripData = tripData
 
     if (dataEditor.kind === 'flight') nextTripData = { ...tripData, flightInfo: tripData.flightInfo.filter((_, index) => index !== dataEditor.index) }
@@ -1184,10 +1188,12 @@ function App() {
       }
     }
 
+    if (nextTripData === tripData) return
     setIsSaving(true)
     try {
       await saveTripDataToFirebase(nextTripData)
       setTripData(nextTripData)
+      if (dataEditor.kind === 'flight') setExpandedFlightIndex(null)
       setDataEditor(null)
       setErrorMessage(null)
     } catch (error) {
@@ -1582,7 +1588,7 @@ function App() {
                     <div className="text-left">
                       <div className="text-3xl font-black text-[#725B4A]">{flightInfo.departureAirport}</div>
                       <div className="mt-1 text-2xl font-black text-[#725B4A]">{flightInfo.departureTime}</div>
-                      <span className="mt-2 inline-block rounded-full bg-[#80B95D] px-3 py-1 text-[10px] font-black text-white">高雄</span>
+                      <span className="mt-2 inline-block rounded-full bg-[#80B95D] px-3 py-1 text-[10px] font-black text-white">{getAirportPlace(flightInfo.departureAirport)}</span>
                     </div>
                     <div className="px-2 text-center text-xs font-bold text-[#B0A695]">
                       <div>02h25m</div>
@@ -1592,7 +1598,7 @@ function App() {
                     <div className="text-right">
                       <div className="text-3xl font-black text-[#725B4A]">{flightInfo.arrivalAirport}</div>
                       <div className="mt-1 text-2xl font-black text-[#725B4A]">{flightInfo.arrivalTime}</div>
-                      <span className="mt-2 inline-block rounded-full bg-[#F1A24D] px-3 py-1 text-[10px] font-black text-white">釜山</span>
+                      <span className="mt-2 inline-block rounded-full bg-[#F1A24D] px-3 py-1 text-[10px] font-black text-white">{getAirportPlace(flightInfo.arrivalAirport)}</span>
                     </div>
                   </div>
                 </div>
@@ -1615,6 +1621,10 @@ function App() {
                     <div className="mt-2 text-lg font-black text-[#725B4A]">{flightInfo.confirmationCode}</div>
                     <div className="text-[10px] text-muted">訂位代碼</div>
                   </div>
+                </div>
+                <div className="mx-4 mb-4 rounded-[20px] border border-[#E6E7DE] p-3">
+                  <div className="text-xs font-bold text-muted">備註</div>
+                  <div className="mt-2 whitespace-pre-wrap break-words text-sm text-ink">{flightInfo.note || '尚未填寫備註'}</div>
                 </div>
                 <button
                   type="button"
@@ -2238,6 +2248,7 @@ function App() {
                       </label>
                     ))}
                     <label className="col-span-2 text-xs font-bold text-muted">訂購人<select value={dataDraft.purchaser ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, purchaser: event.target.value })} className="form-field"><option value="">請選擇成員</option>{members.map((member) => <option key={member.name} value={member.name}>{member.name}</option>)}</select></label>
+                    <label className="col-span-2 text-xs font-bold text-muted">備註<textarea value={dataDraft.note ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, note: event.target.value })} rows={3} className="form-field resize-none" /></label>
                   </div>
                 )}
 
@@ -2290,7 +2301,7 @@ function App() {
               </div>
 
               <div className="mt-5 flex gap-2">
-                {dataEditor.index !== null && dataEditor.kind !== 'parkDay' && (
+                {dataEditor.index !== null && dataEditor.kind !== 'parkDay' && dataEditor.kind !== 'tripSettings' && (
                   <button type="button" onClick={() => void deleteDataEditor()} disabled={isSaving} className="rounded-full border border-red-200 px-4 py-2.5 text-xs font-black text-red-600 disabled:opacity-50">
                     刪除
                   </button>
