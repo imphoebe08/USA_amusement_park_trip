@@ -20,7 +20,7 @@ import {
   faTicket,
   faUsers,
 } from '@fortawesome/free-solid-svg-icons'
-import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage'
+import { getDownloadURL, ref as storageRef, uploadBytesResumable } from 'firebase/storage'
 import { doc, getDoc, getDocFromServer, setDoc } from 'firebase/firestore'
 
 import { db, ensureAnonymousAuth, storage } from './firebase'
@@ -254,10 +254,10 @@ const compressImageToWebp = async (file: File) => {
   const imageUrl = URL.createObjectURL(file)
   try {
     const image = new Image()
-    image.src = imageUrl
     await new Promise<void>((resolve, reject) => {
       image.onload = () => resolve()
       image.onerror = () => reject(new Error('無法讀取圖片。'))
+      image.src = imageUrl
     })
 
     // Preserve small print and barcode resolution.
@@ -280,21 +280,36 @@ const compressImageToWebp = async (file: File) => {
   }
 }
 
+const withCertificateTimeout = async <T,>(operation: Promise<T>, cancel?: () => void): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error('憑證處理或上傳逾時，請檢查網路後按儲存重試。'))
+        cancel?.()
+      }, 45_000)
+    })])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 const uploadCertificate = async (file: File) => {
   if (!storage) throw new Error('Firebase Storage 尚未設定。')
   if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('憑證只支援 PDF、JPG、PNG 或 WebP。')
   if (!file.size) throw new Error('檔案是空的，請重新選擇。')
-  await ensureAnonymousAuth()
+  await withCertificateTimeout(ensureAnonymousAuth())
   const isImage = file.type.startsWith('image/')
-  const content = isImage ? await compressImageToWebp(file) : file
+  const content = isImage ? await withCertificateTimeout(compressImageToWebp(file)) : file
   if (content.size >= 10 * 1024 * 1024) throw new Error('處理後的憑證必須小於 10 MB，請選擇較小的檔案。')
   const contentType = content.type
   const extension = ({ 'image/webp': 'webp', 'image/png': 'png', 'image/jpeg': 'jpg', 'application/pdf': 'pdf' } as Record<string, string>)[contentType] || 'png'
   const baseName = file.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_')
   const fileRef = storageRef(storage, `trip/orlando-escape/certificates/${crypto.randomUUID()}-${baseName}.${extension}`)
-  const snapshot = await uploadBytes(fileRef, content, { contentType })
+  const task = uploadBytesResumable(fileRef, content, { contentType })
+  const snapshot = await withCertificateTimeout(Promise.resolve(task), () => task.cancel())
   return {
-    url: await getDownloadURL(snapshot.ref),
+    url: await withCertificateTimeout(getDownloadURL(snapshot.ref)),
     name: `${file.name.replace(/\.[^.]+$/, '')}.${extension}`,
     type: contentType,
   }
@@ -302,6 +317,10 @@ const uploadCertificate = async (file: File) => {
 
 const getFirebaseErrorMessage = (error: unknown, fallback: string) => {
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+  if (code === 'storage/unauthorized') return '憑證上傳被拒絕：請確認 Firebase Storage Rules 允許目前登入者上傳。'
+  if (code === 'storage/bucket-not-found' || code === 'storage/project-not-found') return '找不到憑證儲存空間，請確認 Firebase Storage 已建立且儲存桶設定正確。'
+  if (code === 'storage/quota-exceeded') return 'Firebase Storage 額度或帳單設定阻擋上傳，請檢查 Firebase Console。'
+  if (code === 'storage/retry-limit-exceeded' || code === 'storage/canceled') return '憑證上傳中斷或逾時，請檢查網路後按儲存重試。'
   if (code.includes('permission-denied')) {
     return 'Firebase 拒絕存取（permission-denied）：請確認雲端已部署的 Firestore Rules 允許目前登入者存取。'
   }
@@ -725,6 +744,15 @@ function App() {
   const [draftItem, setDraftItem] = useState<ScheduleItem>(emptyScheduleItem)
   const [dataEditor, setDataEditor] = useState<DataEditor | null>(null)
   const [dataDraft, setDataDraft] = useState<Record<string, string>>({})
+  const [pendingCertificate, setPendingCertificate] = useState<File | null>(null)
+  const [pendingCertificateUrl, setPendingCertificateUrl] = useState('')
+  const [certificateStatus, setCertificateStatus] = useState('')
+  useEffect(() => {
+    if (!pendingCertificate) { setPendingCertificateUrl(''); return }
+    const url = URL.createObjectURL(pendingCertificate)
+    setPendingCertificateUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [pendingCertificate])
   const [isSaving, setIsSaving] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [draggingScheduleIndex, setDraggingScheduleIndex] = useState<number | null>(null)
@@ -987,38 +1015,30 @@ function App() {
   }
 
   const openDataEditor = (editor: DataEditor, draft: Record<string, string>) => {
+    setPendingCertificate(null)
+    setCertificateStatus('')
     setDataEditor(editor)
     setDataDraft(draft)
     setErrorMessage(null)
   }
 
-  const handleCertificateChange = async (file: File | undefined) => {
+  const handleCertificateChange = (file: File | undefined) => {
     if (!file || isSaving) return
     if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
       setErrorMessage('憑證只支援 PDF、JPG、PNG 或 WebP。')
       return
     }
-
-    setIsSaving(true)
-    try {
-      const attachment = await uploadCertificate(file)
-      setDataDraft((current) => ({
-        ...current,
-        attachmentUrl: attachment.url,
-        attachmentName: attachment.name,
-        attachmentType: attachment.type,
-      }))
-      setErrorMessage(null)
-    } catch (error) {
-      console.error('Failed to upload certificate:', error)
-      setErrorMessage(getFirebaseErrorMessage(error, '憑證上傳失敗，請確認 Firebase Storage 設定。'))
-    } finally {
-      setIsSaving(false)
+    if (!file.size) { setErrorMessage('檔案是空的，請重新選擇。'); return }
+    if (file.type === 'application/pdf' && file.size >= 10 * 1024 * 1024) {
+      setErrorMessage('PDF 必須小於 10 MB。')
+      return
     }
+    setPendingCertificate(file)
+    setErrorMessage(null)
   }
 
   const closeDataEditor = () => {
-    if (!isSaving) setDataEditor(null)
+    if (!isSaving) { setPendingCertificate(null); setDataEditor(null) }
   }
 
   const saveDataEditor = async () => {
@@ -1175,6 +1195,19 @@ function App() {
 
     setIsSaving(true)
     try {
+      if (pendingCertificate && (dataEditor.kind === 'flight' || dataEditor.kind === 'booking')) {
+        if (!navigator.onLine) throw new Error('目前離線，請連上網路後按儲存重試。')
+        setCertificateStatus('憑證處理／上傳中…')
+        const attachment = await uploadCertificate(pendingCertificate)
+        // Keep successful upload in the draft if the following document write fails.
+        setDataDraft((current) => ({ ...current, attachmentUrl: attachment.url, attachmentName: attachment.name, attachmentType: attachment.type }))
+        setPendingCertificate(null)
+        const field = dataEditor.kind === 'flight' ? 'flightInfo' : 'bookingCards'
+        const index = dataEditor.index ?? nextTripData[field].length - 1
+        if (field === 'flightInfo') nextTripData = { ...nextTripData, flightInfo: nextTripData.flightInfo.map((item, i) => i === index ? { ...item, attachment } : item) }
+        else nextTripData = { ...nextTripData, bookingCards: nextTripData.bookingCards.map((item, i) => i === index ? { ...item, attachment } : item) }
+      }
+      setCertificateStatus('資料儲存中…')
       await saveTripDataToFirebase(nextTripData)
       setTripData(nextTripData)
       setDataEditor(null)
@@ -1184,6 +1217,7 @@ function App() {
       setErrorMessage(getFirebaseErrorMessage(error, '資料儲存失敗'))
     } finally {
       setIsSaving(false)
+      setCertificateStatus('')
     }
   }
 
@@ -2169,7 +2203,7 @@ function App() {
                   disabled={isSaving}
                   className="flex-1 rounded-full bg-olive px-4 py-2.5 text-xs font-black text-white disabled:opacity-50"
                 >
-                  {isSaving ? '儲存中…' : '儲存'}
+                  {isSaving ? certificateStatus || '儲存中…' : '儲存'}
                 </button>
               </div>
             </div>
@@ -2272,12 +2306,13 @@ function App() {
                       憑證檔案（PDF / JPG / PNG / WebP；小於 10 MB）
                       <input type="file" disabled={isSaving} accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => { void handleCertificateChange(event.target.files?.[0]); event.target.value = '' }} className="form-field file:mr-2 file:rounded-full file:border-0 file:bg-olive file:px-3 file:py-1 file:text-xs file:font-black file:text-white" />
                     </label>
-                    {dataDraft.attachmentUrl && (
+                    {pendingCertificate && <div className="space-y-2"><button type="button" disabled={!pendingCertificateUrl || isSaving} onClick={() => setPreviewAttachment({ url: pendingCertificateUrl, name: pendingCertificate.name, type: pendingCertificate.type })} className="text-xs font-bold text-sky-700">待儲存：{pendingCertificate.name}（{(pendingCertificate.size / 1024 / 1024).toFixed(2)} MB），點擊預覽</button><button type="button" disabled={isSaving} onClick={() => setPendingCertificate(null)} className="ml-3 text-xs text-red-600">取消選取</button></div>}
+                    {!pendingCertificate && dataDraft.attachmentUrl && (
                       <button type="button" onClick={() => setPreviewAttachment({ url: dataDraft.attachmentUrl, name: dataDraft.attachmentName || 'certificate', type: dataDraft.attachmentType || 'application/pdf' })} className="w-full rounded-2xl bg-sky-50 px-3 py-2 text-left text-xs font-black text-sky-700">
                         已上傳：{dataDraft.attachmentName || '憑證'}，點擊預覽
                       </button>
                     )}
-                    <p className="text-xs text-muted">圖片保留原始尺寸，以高品質 WebP 縮小；若未變小則保留原檔。PDF 保留原檔以維持文字與條碼清晰。上傳後請按儲存。</p>
+                    <p className="text-xs text-muted">圖片保留原始尺寸，以高品質 WebP 縮小；若未變小則保留原檔。PDF 保留原檔以維持文字與條碼清晰。選取檔案只會暫存，按「儲存」才會處理、上傳並儲存資料。</p>
                 </div>}
 
                 {dataEditor.kind === 'tripSettings' && (
@@ -2335,7 +2370,7 @@ function App() {
                   </button>
                 )}
                 <button type="button" onClick={() => void saveDataEditor()} disabled={isSaving} className="flex-1 rounded-full bg-olive px-4 py-2.5 text-xs font-black text-white disabled:opacity-50">
-                  {isSaving ? '儲存中…' : '儲存'}
+                  {isSaving ? certificateStatus || '儲存中…' : '儲存'}
                 </button>
               </div>
             </div>

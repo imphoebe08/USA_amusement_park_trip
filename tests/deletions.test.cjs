@@ -10,6 +10,7 @@ const code = ts.transpileModule([
   extract('  const deleteScheduleItem', '  const openDataEditor'),
   extract('  const deleteDataEditor', '  const togglePlanningTask'),
   extract('  const saveDataEditor', '  const deleteDataEditor'),
+  extract('  const handleCertificateChange', '  const saveDataEditor'),
 ].join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
 
 function setup(kind, persist = async () => {}) {
@@ -21,7 +22,7 @@ function setup(kind, persist = async () => {}) {
   }
   const writes = [], updates = [], errors = [], closed = []
   const context = vm.createContext({
-    tripData: original, isSaving: false, hasLoadedTripData: true,
+    pendingCertificate: null, setPendingCertificate: value => { context.pendingCertificate = value }, setCertificateStatus: () => {}, setDataDraft: fn => { context.dataDraft = fn(context.dataDraft) }, tripData: original, isSaving: false, hasLoadedTripData: true,
     window: { confirm: () => true }, draftItem: { title: '行程' }, dataDraft: { title: '資料' },
     dataEditor: { kind, index: 1, parkId: 'universal', dayId: 'day1' }, editingItem: { date: '11/4', index: 1 },
     db: {}, navigator: { onLine: true }, ensureAnonymousAuth: async () => {},
@@ -32,7 +33,7 @@ function setup(kind, persist = async () => {}) {
     setExpandedFlightIndex: () => {}, setErrorMessage: value => errors.push(value), getFirebaseErrorMessage: (_, fallback) => fallback,
     console: { error() {} },
   })
-  vm.runInContext(code + '\nglobalThis.save = saveDataEditor; globalThis.remove = ' + (kind === 'schedule' ? 'deleteScheduleItem' : 'deleteDataEditor'), context)
+  vm.runInContext(code + '\nglobalThis.save = saveDataEditor; globalThis.select = handleCertificateChange; globalThis.close = closeDataEditor; globalThis.remove = ' + (kind === 'schedule' ? 'deleteScheduleItem' : 'deleteDataEditor'), context)
   return { save: context.save, remove: context.remove, original, writes, updates, errors, closed, context }
 }
 
@@ -117,3 +118,57 @@ for (const kind of ['schedule', ...Object.keys(fields), 'route']) {
     assert.equal(ui.context.isSaving, false)
   })
 }
+
+test('selecting a certificate only stages the file, and closing discards it', () => {
+  const ui = setup('flight')
+  ui.context.uploadCertificate = () => { throw new Error('must not upload on selection') }
+  const file = { name: 'ticket.pdf', type: 'application/pdf', size: 100 }
+  ui.context.select(file)
+  assert.equal(ui.context.pendingCertificate, file)
+  assert.equal(ui.context.isSaving, false)
+  assert.equal(ui.writes.length, 0)
+  ui.context.close()
+  assert.equal(ui.context.pendingCertificate, null)
+  assert.deepEqual(ui.closed, [null])
+})
+for (const kind of ['flight', 'booking']) {
+  test(`${kind}: save uploads before writing the attachment to the correct record`, async () => {
+    const ui = setup(kind)
+    const file = { name: 'ticket.pdf', type: 'application/pdf', size: 100 }
+    const attachment = { url: 'https://example.com/ticket', name: 'ticket.pdf', type: file.type }
+    ui.context.dataDraft = { title: 'test', label: 'Hotel' }
+    ui.context.pendingCertificate = file
+    ui.context.uploadCertificate = async selected => {
+      assert.equal(selected, file)
+      assert.equal(ui.writes.length, 0)
+      return attachment
+    }
+    await ui.save()
+    assert.deepEqual(ui.writes[0].data[fields[kind]][1].attachment, attachment)
+    assert.equal(ui.context.pendingCertificate, null)
+  })
+}
+test('upload failure preserves the selected file and never writes the document', async () => {
+  const ui = setup('flight')
+  ui.context.dataDraft = { title: 'test' }
+  ui.context.pendingCertificate = { name: 'ticket.pdf' }
+  ui.context.uploadCertificate = async () => { throw new Error('timeout') }
+  await ui.save()
+  assert.equal(ui.writes.length, 0)
+  assert.equal(ui.closed.length, 0)
+  assert.equal(ui.context.pendingCertificate.name, 'ticket.pdf')
+  assert.equal(ui.context.isSaving, false)
+})
+test('document failure retains uploaded metadata so retry does not upload again', async () => {
+  let attempts = 0, uploads = 0
+  const ui = setup('flight', async () => { if (++attempts === 1) throw new Error('write failed') })
+  ui.context.dataDraft = { title: 'test' }
+  ui.context.pendingCertificate = { name: 'ticket.pdf' }
+  ui.context.uploadCertificate = async () => { uploads++; return { url: 'https://example.com/ticket', name: 'ticket.pdf', type: 'application/pdf' } }
+  await ui.save()
+  assert.equal(ui.closed.length, 0)
+  await ui.save()
+  assert.equal(uploads, 1)
+  assert.equal(ui.writes[1].data.flightInfo[1].attachment.url, 'https://example.com/ticket')
+  assert.deepEqual(ui.closed, [null])
+})

@@ -4,10 +4,10 @@ const fs = require('node:fs')
 const ts = require('typescript')
 const vm = require('node:vm')
 const source = fs.readFileSync('src/App.tsx', 'utf8')
-const code = ts.transpileModule(source.slice(source.indexOf('const uploadCertificate ='), source.indexOf('const getFirebaseErrorMessage')), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+const code = ts.transpileModule(source.slice(source.indexOf('const withCertificateTimeout ='), source.indexOf('const getFirebaseErrorMessage')), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
 function setup(compressed) {
   const uploads = [], auth = []
-  const context = { storage: {}, crypto: { randomUUID: () => 'unique' }, ensureAnonymousAuth: async () => auth.push(true), compressImageToWebp: async () => compressed, storageRef: (_, path) => path, uploadBytes: async (path, content, metadata) => { uploads.push({ path, content, metadata }); return { ref: path } }, getDownloadURL: async () => 'https://example.com/certificate' }
+  const context = { setTimeout, clearTimeout, storage: {}, crypto: { randomUUID: () => 'unique' }, ensureAnonymousAuth: async () => auth.push(true), compressImageToWebp: async () => compressed, storageRef: (_, path) => path, uploadBytesResumable: (path, content, metadata) => { uploads.push({ path, content, metadata }); return Object.assign(Promise.resolve({ ref: path }), { cancel() {} }) }, getDownloadURL: async () => 'https://example.com/certificate' }
   vm.runInNewContext(code + '\nglobalThis.upload = uploadCertificate', context)
   return { upload: context.upload, uploads, auth }
 }
@@ -34,4 +34,20 @@ test('unsupported, empty and over-limit files are never uploaded', async () => {
   const ui = setup()
   for (const file of [{ type: 'text/plain', size: 1 }, { type: 'application/pdf', size: 0 }, { type: 'application/pdf', size: 10 * 1024 * 1024 }]) await assert.rejects(ui.upload(file))
   assert.equal(ui.uploads.length, 0)
+})
+
+test('an upload timeout cancels the active task and clears its timer', async () => {
+  let expire, cancelled = false, cleared = false
+  const context = {
+    setTimeout: callback => { expire = callback; return 1 }, clearTimeout: () => { cleared = true },
+    storage: {}, crypto: { randomUUID: () => 'unique' }, ensureAnonymousAuth: async () => {},
+    storageRef: () => 'path', uploadBytesResumable: () => Object.assign(new Promise(() => {}), { cancel: () => { cancelled = true } }),
+  }
+  vm.runInNewContext(code + '\nglobalThis.upload = uploadCertificate', context)
+  const pending = context.upload({ name: 'ticket.pdf', type: 'application/pdf', size: 100 })
+  await new Promise(resolve => setImmediate(resolve))
+  expire()
+  await assert.rejects(pending, /逾時/)
+  assert.equal(cancelled, true)
+  assert.equal(cleared, true)
 })
