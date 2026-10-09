@@ -43,6 +43,7 @@ const parkLabelColors: Record<string, string> = {
 }
 type BookingMode = 'flight' | 'hotel' | 'car' | 'voucher'
 type FlightInfo = {
+  attachment?: { url: string; name: string; type: string }
   note?: string
   airline: string
   flightNumber: string
@@ -211,7 +212,7 @@ const weatherDescription = (code: number | undefined) => {
 }
 
 const toDateInputValue = (dateText: string) => {
-  const match = dateText.match(/(\d{1,4})[/-](\d{1,2})[/-](\d{1,2})|^(\d{1,2})\/(\d{1,2})$/)
+  const match = dateText.match(/(\d{1,4})[/-](\d{1,2})[/-](\d{1,2})|^(\d{1,2})\/(\d{1,2})(?:-\d{1,2})?$/)
   if (!match) return ''
   const year = match[1] ? Number(match[1]) : new Date().getFullYear()
   const month = Number(match[2] ?? match[4])
@@ -259,18 +260,20 @@ const compressImageToWebp = async (file: File) => {
       image.onerror = () => reject(new Error('無法讀取圖片。'))
     })
 
-    const maxDimension = 1800
-    const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight))
+    // Preserve small print and barcode resolution.
+    const scale = 1
     const canvas = document.createElement('canvas')
     canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
     canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
-    canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height)
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('瀏覽器無法處理圖片。')
+    context.drawImage(image, 0, 0, canvas.width, canvas.height)
 
     return await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((blob) => {
-        if (blob) resolve(blob)
+        if (blob) resolve(blob.size < file.size ? blob : file)
         else reject(new Error('圖片壓縮失敗。'))
-      }, 'image/webp', 0.82)
+      }, 'image/webp', 0.95)
     })
   } finally {
     URL.revokeObjectURL(imageUrl)
@@ -279,16 +282,21 @@ const compressImageToWebp = async (file: File) => {
 
 const uploadCertificate = async (file: File) => {
   if (!storage) throw new Error('Firebase Storage 尚未設定。')
+  if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('憑證只支援 PDF、JPG、PNG 或 WebP。')
+  if (!file.size) throw new Error('檔案是空的，請重新選擇。')
+  await ensureAnonymousAuth()
   const isImage = file.type.startsWith('image/')
   const content = isImage ? await compressImageToWebp(file) : file
-  const extension = isImage ? 'webp' : 'pdf'
+  if (content.size >= 10 * 1024 * 1024) throw new Error('處理後的憑證必須小於 10 MB，請選擇較小的檔案。')
+  const contentType = content.type
+  const extension = ({ 'image/webp': 'webp', 'image/png': 'png', 'image/jpeg': 'jpg', 'application/pdf': 'pdf' } as Record<string, string>)[contentType] || 'png'
   const baseName = file.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_')
-  const fileRef = storageRef(storage, `trip/orlando-escape/certificates/${Date.now()}-${baseName}.${extension}`)
-  const snapshot = await uploadBytes(fileRef, content, { contentType: isImage ? 'image/webp' : 'application/pdf' })
+  const fileRef = storageRef(storage, `trip/orlando-escape/certificates/${crypto.randomUUID()}-${baseName}.${extension}`)
+  const snapshot = await uploadBytes(fileRef, content, { contentType })
   return {
     url: await getDownloadURL(snapshot.ref),
-    name: file.name,
-    type: isImage ? 'image/webp' : 'application/pdf',
+    name: `${file.name.replace(/\.[^.]+$/, '')}.${extension}`,
+    type: contentType,
   }
 }
 
@@ -729,7 +737,8 @@ function App() {
   const [dragOverBookingIndex, setDragOverBookingIndex] = useState<number | null>(null)
   const [dragOverFlightIndex, setDragOverFlightIndex] = useState<number | null>(null)
   const [dragOverTaskIndex, setDragOverTaskIndex] = useState<number | null>(null)
-  const [bookingSortDirection, setBookingSortDirection] = useState<'asc' | 'desc'>('asc')
+  const [flightSortDirection, setFlightSortDirection] = useState<'asc' | 'desc' | 'manual'>('asc')
+  const [bookingSortDirection, setBookingSortDirection] = useState<'asc' | 'desc' | 'manual'>('asc')
 
   useEffect(() => {
     let isCancelled = false
@@ -861,14 +870,19 @@ function App() {
     return !nearest || departure < nearest.departure ? { flight, departure } : nearest
   }, null)?.flight
 
-  const sortedFlights = [...tripData.flightInfo].sort((first, second) => Number(isPastFlight(first)) - Number(isPastFlight(second)))
+  const sortedFlights = [...tripData.flightInfo].sort((first, second) => {
+    if (flightSortDirection === 'manual') return 0
+    const firstDate = toDateInputValue(first.date)
+    const secondDate = toDateInputValue(second.date)
+    if (!firstDate) return secondDate ? 1 : 0
+    if (!secondDate) return -1
+    const order = `${firstDate} ${first.departureTime}`.localeCompare(`${secondDate} ${second.departureTime}`)
+    return flightSortDirection === 'asc' ? order : -order
+  })
   const visibleBookingCards = bookingCards
     .filter((card) => bookingMode === 'hotel' ? card.label === 'Hotel' : bookingMode === 'car' ? card.label === 'Car' : bookingMode === 'voucher' ? card.label === 'Voucher' : false)
     .sort((first, second) => {
-      if (bookingMode !== 'hotel') return 0
-      const firstPast = isPastBooking(first)
-      const secondPast = isPastBooking(second)
-      if (firstPast !== secondPast) return Number(firstPast) - Number(secondPast)
+      if (bookingMode !== 'hotel' || bookingSortDirection === 'manual') return 0
       return compareBookingCards(first, second, bookingSortDirection)
     })
   const flightInfo = tripData.flightInfo[expandedFlightIndex ?? 0] ?? localTripData.flightInfo[0]
@@ -904,6 +918,8 @@ function App() {
       setErrorMessage('請至少填寫時間與行程名稱。')
       return
     }
+
+    if (!window.confirm(`確定刪除「${draftItem.title || '這筆行程'}」？此操作無法復原。`)) return
 
     const nextDayPlans = tripData.dayPlans.map((day) => {
       if (day.date !== editingItem.date) {
@@ -941,6 +957,8 @@ function App() {
       return
     }
 
+    if (!window.confirm(`確定刪除「${draftItem.title || '這筆行程'}」？此操作無法復原。`)) return
+
     const nextDayPlans = tripData.dayPlans.map((day) => {
       if (day.date !== editingItem.date) {
         return day
@@ -975,7 +993,7 @@ function App() {
   }
 
   const handleCertificateChange = async (file: File | undefined) => {
-    if (!file) return
+    if (!file || isSaving) return
     if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
       setErrorMessage('憑證只支援 PDF、JPG、PNG 或 WebP。')
       return
@@ -993,7 +1011,7 @@ function App() {
       setErrorMessage(null)
     } catch (error) {
       console.error('Failed to upload certificate:', error)
-      setErrorMessage('憑證上傳失敗，請確認 Firebase Storage rules。')
+      setErrorMessage(getFirebaseErrorMessage(error, '憑證上傳失敗，請確認 Firebase Storage 設定。'))
     } finally {
       setIsSaving(false)
     }
@@ -1004,6 +1022,7 @@ function App() {
   }
 
   const saveDataEditor = async () => {
+    if (isSaving) return
     if (!dataEditor || !dataDraft.title?.trim()) {
       setErrorMessage('請至少填寫名稱。')
       return
@@ -1013,6 +1032,7 @@ function App() {
 
     if (dataEditor.kind === 'flight') {
       const item: FlightInfo = {
+        ...(dataDraft.attachmentUrl ? { attachment: { url: dataDraft.attachmentUrl, name: dataDraft.attachmentName || 'certificate', type: dataDraft.attachmentType || 'application/pdf' } } : {}),
         note: dataDraft.note || '',
         airline: dataDraft.airline || '', flightNumber: dataDraft.flightNumber || '',
         departureAirport: dataDraft.departureAirport || '', departureTime: dataDraft.departureTime || '',
@@ -1123,6 +1143,7 @@ function App() {
         park: parkOptions[dataEditor.parkId].find((park) => park === dataDraft.park) ?? '',
         area: dataDraft.area || '',
         type: (dataDraft.type || '設施') as ParkDayRoute['type'],
+        ...(dataDraft.attachmentUrl ? { attachment: { url: dataDraft.attachmentUrl, name: dataDraft.attachmentName || 'certificate', type: dataDraft.attachmentType || 'application/pdf' } } : {}),
         note: dataDraft.note || '',
         ...(dataDraft.type === '設施' ? { rating: Math.max(0, Math.min(5, Math.round(Number(dataDraft.rating) || 0))) } : {}),
       }
@@ -1168,6 +1189,7 @@ function App() {
 
   const deleteDataEditor = async () => {
     if (isSaving || !dataEditor || dataEditor.index === null || dataEditor.kind === 'tripSettings' || dataEditor.kind === 'parkDay') return
+    if (!window.confirm(`確定刪除「${dataDraft.title || '這筆資料'}」？此操作無法復原。`)) return
     let nextTripData = tripData
 
     if (dataEditor.kind === 'flight') nextTripData = { ...tripData, flightInfo: tripData.flightInfo.filter((_, index) => index !== dataEditor.index) }
@@ -1290,7 +1312,7 @@ function App() {
     setDragOverBookingIndex(null)
     try {
       await saveTripDataToFirebase(nextTripData)
-      flushSync(() => setTripData(nextTripData))
+      flushSync(() => { setTripData(nextTripData); if (bookingMode === 'hotel') setBookingSortDirection('manual') })
       setErrorMessage(null)
       return true
     } catch (error) {
@@ -1315,7 +1337,7 @@ function App() {
     setDragOverFlightIndex(null)
     try {
       await saveTripDataToFirebase(nextTripData)
-      flushSync(() => setTripData(nextTripData))
+      flushSync(() => { setTripData(nextTripData); setFlightSortDirection('manual') })
       setErrorMessage(null)
       return true
     } catch (error) {
@@ -1536,13 +1558,14 @@ function App() {
               <>
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-base font-black">航班航段</h3>
+                <select aria-label="航班排序" value={flightSortDirection} onChange={(event) => setFlightSortDirection(event.target.value as 'asc' | 'desc' | 'manual')} className="form-field mt-0 w-auto text-xs"><option value="asc">日期由近到遠</option><option value="desc">日期由遠到近</option><option value="manual">手動拖曳排序</option></select>
               </div>
               <div className="space-y-2">
                 {sortedFlights.map((flight, visibleIndex) => {
                   const index = tripData.flightInfo.indexOf(flight)
                   return (
                   <Fragment key={`${flight.flightNumber}-${flight.date}`}>
-                    {visibleIndex > 0 && isPastFlight(flight) && !isPastFlight(sortedFlights[visibleIndex - 1]) && (
+                    {isPastFlight(flight) && (visibleIndex === 0 || !isPastFlight(sortedFlights[visibleIndex - 1])) && (
                       <div className="flex items-center gap-3 pb-3 pt-6" role="separator" aria-label="已過期航班">
                         <div className="h-px flex-1 bg-muted/40" />
                         <span className="text-xs font-bold text-muted">已過期航班</span>
@@ -1628,11 +1651,12 @@ function App() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => openDataEditor({ kind: 'flight', index: expandedFlightIndex }, { ...flightInfo, date: toDateInputValue(flightInfo.date), title: flightInfo.flightNumber })}
+                  onClick={() => openDataEditor({ kind: 'flight', index: expandedFlightIndex }, { ...Object.fromEntries(Object.entries(flightInfo).filter(([key]) => key !== 'attachment')) as Record<string, string>, attachmentUrl: flightInfo.attachment?.url ?? '', attachmentName: flightInfo.attachment?.name ?? '', attachmentType: flightInfo.attachment?.type ?? '', date: toDateInputValue(flightInfo.date), title: flightInfo.flightNumber })}
                   className="mx-4 mb-4 flex w-[calc(100%-2rem)] items-center justify-center gap-2 rounded-[20px] border-2 border-[#DCE4D2] py-3 text-sm font-black text-[#9B907E]"
                 >
                   編輯航班資訊
                 </button>
+                {flightInfo.attachment && <div className="mt-3 flex gap-2"><button type="button" onClick={() => setPreviewAttachment(flightInfo.attachment!)} className="rounded-full bg-sky-100 px-3 py-1.5 text-xs font-black text-sky-700">預覽憑證</button><a href={flightInfo.attachment.url} download={flightInfo.attachment.name} target="_blank" rel="noreferrer" className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-700">下載憑證</a></div>}
               </section>
                     )}
                   </div>
@@ -1650,9 +1674,9 @@ function App() {
                 </div>
                 {bookingMode === 'hotel' && (
                   <div className="mb-3 flex justify-end">
-                    <select value={bookingSortDirection} onChange={(event) => setBookingSortDirection(event.target.value as 'asc' | 'desc')} className="form-field mt-0 w-auto text-xs">
-                      <option value="asc">日期遞增</option>
-                      <option value="desc">日期遞減</option>
+                    <select aria-label="住宿排序" value={bookingSortDirection} onChange={(event) => setBookingSortDirection(event.target.value as 'asc' | 'desc' | 'manual')} className="form-field mt-0 w-auto text-xs">
+                      <option value="asc">日期由近到遠</option>
+                      <option value="desc">日期由遠到近</option><option value="manual">手動拖曳排序</option>
                     </select>
                   </div>
                 )}
@@ -2214,15 +2238,6 @@ function App() {
                         ))}
                       </div>
                     )}
-                    {dataDraft.label === 'Voucher' && <label className="block text-xs font-bold text-muted">
-                      憑證檔案（PDF / JPG / PNG）
-                      <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => void handleCertificateChange(event.target.files?.[0])} className="form-field file:mr-2 file:rounded-full file:border-0 file:bg-olive file:px-3 file:py-1 file:text-xs file:font-black file:text-white" />
-                    </label>}
-                    {dataDraft.label === 'Voucher' && dataDraft.attachmentUrl && (
-                      <button type="button" onClick={() => setPreviewAttachment({ url: dataDraft.attachmentUrl, name: dataDraft.attachmentName || 'certificate', type: dataDraft.attachmentType || 'application/pdf' })} className="w-full rounded-2xl bg-sky-50 px-3 py-2 text-left text-xs font-black text-sky-700">
-                        已上傳：{dataDraft.attachmentName || '憑證'}，點擊預覽
-                      </button>
-                    )}
                     <label className="block text-xs font-bold text-muted">補充資訊<textarea value={dataDraft.meta ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, meta: event.target.value })} rows={3} className="form-field resize-none" /></label>
                   </>
                 )}
@@ -2251,6 +2266,19 @@ function App() {
                     <label className="col-span-2 text-xs font-bold text-muted">備註<textarea value={dataDraft.note ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, note: event.target.value })} rows={3} className="form-field resize-none" /></label>
                   </div>
                 )}
+
+                {(dataEditor.kind === 'booking' || dataEditor.kind === 'flight') && <div className="space-y-3">
+                    <label className="block text-xs font-bold text-muted">
+                      憑證檔案（PDF / JPG / PNG / WebP；小於 10 MB）
+                      <input type="file" disabled={isSaving} accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => { void handleCertificateChange(event.target.files?.[0]); event.target.value = '' }} className="form-field file:mr-2 file:rounded-full file:border-0 file:bg-olive file:px-3 file:py-1 file:text-xs file:font-black file:text-white" />
+                    </label>
+                    {dataDraft.attachmentUrl && (
+                      <button type="button" onClick={() => setPreviewAttachment({ url: dataDraft.attachmentUrl, name: dataDraft.attachmentName || 'certificate', type: dataDraft.attachmentType || 'application/pdf' })} className="w-full rounded-2xl bg-sky-50 px-3 py-2 text-left text-xs font-black text-sky-700">
+                        已上傳：{dataDraft.attachmentName || '憑證'}，點擊預覽
+                      </button>
+                    )}
+                    <p className="text-xs text-muted">圖片保留原始尺寸，以高品質 WebP 縮小；若未變小則保留原檔。PDF 保留原檔以維持文字與條碼清晰。上傳後請按儲存。</p>
+                </div>}
 
                 {dataEditor.kind === 'tripSettings' && (
                   <>

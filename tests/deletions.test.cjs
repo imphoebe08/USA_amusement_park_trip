@@ -22,6 +22,7 @@ function setup(kind, persist = async () => {}) {
   const writes = [], updates = [], errors = [], closed = []
   const context = vm.createContext({
     tripData: original, isSaving: false, hasLoadedTripData: true,
+    window: { confirm: () => true }, draftItem: { title: '行程' }, dataDraft: { title: '資料' },
     dataEditor: { kind, index: 1, parkId: 'universal', dayId: 'day1' }, editingItem: { date: '11/4', index: 1 },
     db: {}, navigator: { onLine: true }, ensureAnonymousAuth: async () => {},
     doc: (...args) => args.slice(1).join('/'), removeUndefined: value => value,
@@ -104,3 +105,15 @@ test('airport labels normalize codes and do not invent an unknown destination', 
   assert.equal(label('XYZ'), 'XYZ')
   assert.equal(label(''), '未設定機場')
 })
+
+for (const kind of ['schedule', ...Object.keys(fields), 'route']) {
+  test(`${kind}: cancelling confirmation does not write or close the editor`, async () => {
+    const ui = setup(kind)
+    ui.context.window.confirm = () => false
+    await ui.remove()
+    assert.equal(ui.writes.length, 0)
+    assert.equal(ui.updates.length, 0)
+    assert.equal(ui.closed.length, 0)
+    assert.equal(ui.context.isSaving, false)
+  })
+}
