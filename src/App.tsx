@@ -3,7 +3,7 @@ import { createPortal, flushSync } from 'react-dom'
 import { DragHandle } from './DragHandle'
 import { PullToRefresh } from './PullToRefresh'
 import { getAirportPlace } from './airports'
-import { formatFlightDuration } from './flightDuration'
+import { formatFlightDuration, getFlightArrivalDate } from './flightDuration'
 import { createPreparationTasks, getPreparationPages, getTaskAssignees, normalizePreparationTasks, parseDraftAssignees, type PreparationTask } from './preparation'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
@@ -898,7 +898,6 @@ function App() {
       if (bookingMode !== 'hotel' || bookingSortDirection === 'manual') return 0
       return compareBookingCards(first, second, bookingSortDirection)
     })
-  const flightInfo = tripData.flightInfo[expandedFlightIndex ?? 0] ?? localTripData.flightInfo[0]
   const tripSettings = tripData.tripSettings
   const countdown = getFlightCountdown(tripData.flightInfo)
   const expenseEntries = tripData.expenseEntries
@@ -1645,61 +1644,61 @@ function App() {
                     {expandedFlightIndex === index && (
               <section className="overflow-hidden rounded-[30px] border border-white/80 bg-white shadow-soft">
                 <div className="bg-[#E9F0FF] px-5 pb-5 pt-4 text-center">
-                  <div className="text-sm font-black tracking-[0.18em] text-[#8D8478]">{flightInfo.airline}</div>
-                  {flightInfo.purchaser && <div className="mt-1 text-xs font-bold text-[#8D8478]">訂購人：{flightInfo.purchaser}</div>}
+                  <div className="text-sm font-black tracking-[0.18em] text-[#8D8478]">{flight.airline}</div>
+                  {flight.purchaser && <div className="mt-1 text-xs font-bold text-[#8D8478]">訂購人：{flight.purchaser}</div>}
                   <div className="mt-3 rounded-[22px] bg-white/80 px-5 py-2 text-5xl font-black tracking-[0.08em] text-[#725B4A] shadow-sm">
-                    {flightInfo.flightNumber}
+                    {flight.flightNumber}
                   </div>
                   <div className="mt-4 flex items-center justify-between rounded-[26px] bg-white px-5 py-5 shadow-sm">
                     <div className="text-left">
-                      <div className="text-3xl font-black text-[#725B4A]">{flightInfo.departureAirport}</div>
-                      <div className="mt-1 text-2xl font-black text-[#725B4A]">{flightInfo.departureTime}</div>
-                      <span className="mt-2 inline-block rounded-full bg-[#80B95D] px-3 py-1 text-[10px] font-black text-white">{getAirportPlace(flightInfo.departureAirport)}</span>
+                      <div className="text-3xl font-black text-[#725B4A]">{flight.departureAirport}</div>
+                      <div className="mt-1 text-2xl font-black text-[#725B4A]">{flight.departureTime}</div>
+                      <span className="mt-2 inline-block rounded-full bg-[#80B95D] px-3 py-1 text-[10px] font-black text-white">{getAirportPlace(flight.departureAirport)}</span>
                     </div>
                     <div className="px-2 text-center text-xs font-bold text-[#B0A695]">
-                      <div>{formatFlightDuration(flightInfo)}</div>
+                      <div>{formatFlightDuration(flight)}</div>
                       <FontAwesomeIcon icon={faPlane} className="my-2 text-xl text-[#3976D8]" />
-                      <div>{flightInfo.date}</div>
+                      <div>{flight.date}</div>
                     </div>
                     <div className="text-right">
-                      <div className="text-3xl font-black text-[#725B4A]">{flightInfo.arrivalAirport}</div>
-                      <div className="mt-1 text-2xl font-black text-[#725B4A]">{flightInfo.arrivalTime}</div>
-                      <span className="mt-2 inline-block rounded-full bg-[#F1A24D] px-3 py-1 text-[10px] font-black text-white">{getAirportPlace(flightInfo.arrivalAirport)}</span>
+                      <div className="text-3xl font-black text-[#725B4A]">{flight.arrivalAirport}</div>
+                      <div className="mt-1 text-2xl font-black text-[#725B4A]">{flight.arrivalTime}</div>
+                      <span className="mt-2 inline-block rounded-full bg-[#F1A24D] px-3 py-1 text-[10px] font-black text-white">{getAirportPlace(flight.arrivalAirport)}</span>
                     </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3 p-4">
                   <div className="rounded-[20px] border border-[#E6E7DE] p-3">
                     <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Baggage</div>
-                    <div className="mt-2 text-xl font-black text-[#725B4A]">{flightInfo.baggage}</div>
+                    <div className="mt-2 text-xl font-black text-[#725B4A]">{flight.baggage}</div>
                   </div>
                   <div className="rounded-[20px] border border-[#E6E7DE] p-3">
                     <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Aircraft</div>
-                    <div className="mt-2 text-xl font-black text-[#725B4A]">{flightInfo.aircraft}</div>
+                    <div className="mt-2 text-xl font-black text-[#725B4A]">{flight.aircraft}</div>
                   </div>
                   <div className="rounded-[20px] border border-[#E6E7DE] p-3">
                     <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Price & type</div>
-                    <div className="mt-2 text-lg font-black text-[#725B4A]">{flightInfo.price}</div>
+                    <div className="mt-2 text-lg font-black text-[#725B4A]">{flight.price}</div>
                     <div className="text-[10px] text-muted">同一張訂單</div>
                   </div>
                   <div className="rounded-[20px] border border-[#E6E7DE] p-3">
                     <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">Confirmation</div>
-                    <div className="mt-2 text-lg font-black text-[#725B4A]">{flightInfo.confirmationCode}</div>
+                    <div className="mt-2 text-lg font-black text-[#725B4A]">{flight.confirmationCode}</div>
                     <div className="text-[10px] text-muted">訂位代碼</div>
                   </div>
                 </div>
                 <div className="mx-4 mb-4 rounded-[20px] border border-[#E6E7DE] p-3">
                   <div className="text-xs font-bold text-muted">備註</div>
-                  <div className="mt-2 whitespace-pre-wrap break-words text-sm text-ink">{flightInfo.note || '尚未填寫備註'}</div>
+                  <div className="mt-2 whitespace-pre-wrap break-words text-sm text-ink">{flight.note || '尚未填寫備註'}</div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => openDataEditor({ kind: 'flight', index: expandedFlightIndex }, { ...Object.fromEntries(Object.entries(flightInfo).filter(([key]) => key !== 'attachment')) as Record<string, string>, attachmentUrl: flightInfo.attachment?.url ?? '', attachmentName: flightInfo.attachment?.name ?? '', attachmentType: flightInfo.attachment?.type ?? '', date: toDateInputValue(flightInfo.date), title: flightInfo.flightNumber })}
+                  onClick={() => openDataEditor({ kind: 'flight', index }, { ...Object.fromEntries(Object.entries(flight).filter(([key]) => key !== 'attachment')) as Record<string, string>, attachmentUrl: flight.attachment?.url ?? '', attachmentName: flight.attachment?.name ?? '', attachmentType: flight.attachment?.type ?? '', date: toDateInputValue(flight.date), arrivalDate: getFlightArrivalDate(flight), title: flight.flightNumber })}
                   className="mx-4 mb-4 flex w-[calc(100%-2rem)] items-center justify-center gap-2 rounded-[20px] border-2 border-[#DCE4D2] py-3 text-sm font-black text-[#9B907E]"
                 >
                   編輯航班資訊
                 </button>
-                {flightInfo.attachment && <div className="mt-3 flex gap-2"><button type="button" onClick={() => setPreviewAttachment(flightInfo.attachment!)} className="rounded-full bg-sky-100 px-3 py-1.5 text-xs font-black text-sky-700">預覽憑證</button><a href={flightInfo.attachment.url} download={flightInfo.attachment.name} target="_blank" rel="noreferrer" className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-700">下載憑證</a></div>}
+                {flight.attachment && <div className="mt-3 flex gap-2"><button type="button" onClick={() => setPreviewAttachment(flight.attachment!)} className="rounded-full bg-sky-100 px-3 py-1.5 text-xs font-black text-sky-700">預覽憑證</button><a href={flight.attachment.url} download={flight.attachment.name} target="_blank" rel="noreferrer" className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-700">下載憑證</a></div>}
               </section>
                     )}
                   </div>
@@ -2291,7 +2290,7 @@ function App() {
                       ['arrivalAirport', '抵達機場'],
                       ['arrivalTime', '抵達時間'],
                       ['date', '出發日期（當地）'],
-                      ['arrivalDate', '抵達日期（當地，可選）'],
+                      ['arrivalDate', '抵達日期（當地）'],
                       ['baggage', '行李'],
                       ['aircraft', '機型'],
                       ['price', '價格'],
@@ -2302,6 +2301,10 @@ function App() {
                         <input type={key === 'date' || key === 'arrivalDate' ? 'date' : 'text'} value={key === 'date' || key === 'arrivalDate' ? toDateInputValue(dataDraft[key] ?? '') : dataDraft[key] ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, [key]: event.target.value })} className="form-field" />
                       </label>
                     ))}
+                    <div className="col-span-2 rounded-2xl bg-sky-50 p-3 text-xs text-sky-800">
+                      <div className="font-black">{formatFlightDuration({ date: dataDraft.date || '', arrivalDate: dataDraft.arrivalDate || '', departureAirport: dataDraft.departureAirport || '', arrivalAirport: dataDraft.arrivalAirport || '', departureTime: dataDraft.departureTime || '', arrivalTime: dataDraft.arrivalTime || '' })}</div>
+                      <p className="mt-1">日期與時間請填各機場的當地時間；系統依機場代碼自動換算時區與夏令時間。跨日請填正確的抵達日期。</p>
+                    </div>
                     <label className="col-span-2 text-xs font-bold text-muted">訂購人<select value={dataDraft.purchaser ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, purchaser: event.target.value })} className="form-field"><option value="">請選擇成員</option>{members.map((member) => <option key={member.name} value={member.name}>{member.name}</option>)}</select></label>
                     <label className="col-span-2 text-xs font-bold text-muted">備註<textarea value={dataDraft.note ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, note: event.target.value })} rows={3} className="form-field resize-none" /></label>
                   </div>

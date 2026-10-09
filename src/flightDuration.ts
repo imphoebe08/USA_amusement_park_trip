@@ -52,6 +52,21 @@ export function getFlightDurationMinutes(flight: FlightTimes, year = new Date().
   const durations = dates.map(date => localToUtc(date + arrivalTime.minutes * 60000, arrivalZone)).filter((time): time is number => time !== null).map(time => (time - departure) / 60000).filter(minutes => minutes > 0 && minutes <= 48 * 60)
   return durations.length ? Math.min(...durations) : null
 }
+export function getFlightArrivalDate(flight: FlightTimes, year = new Date().getFullYear()): string {
+  if (flight.arrivalDate) return flight.arrivalDate
+  const duration = getFlightDurationMinutes(flight, year)
+  const departureTime = parseTime(flight.departureTime)
+  const baseDate = parseDate(flight.date, year)
+  const departureZone = zoneFor(flight.departureAirport), arrivalZone = zoneFor(flight.arrivalAirport)
+  if (duration === null || !departureTime || baseDate === null || !departureZone || !arrivalZone) return ''
+  const departureDate = departureTime.date ? parseDate(departureTime.date, new Date(baseDate).getUTCFullYear()) : baseDate
+  if (departureDate === null) return ''
+  const departure = localToUtc(departureDate + departureTime.minutes * 60000, departureZone)
+  if (departure === null) return ''
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: arrivalZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(departure + duration * 60000)).map(part => [part.type, part.value]))
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
 export function formatFlightDuration(flight: FlightTimes): string {
   const minutes = getFlightDurationMinutes(flight)
   if (minutes === null) return '飛行時間：請確認日期、時間與機場'
