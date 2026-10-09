@@ -3,6 +3,7 @@ import { createPortal, flushSync } from 'react-dom'
 import { DragHandle } from './DragHandle'
 import { PullToRefresh } from './PullToRefresh'
 import { getAirportPlace } from './airports'
+import { createPreparationTasks, getTaskAssignees, normalizePreparationTasks, parseDraftAssignees, type PreparationTask } from './preparation'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faCalendarDays,
@@ -109,9 +110,10 @@ type ParkSection = {
 
 type TripData = {
   flightInfo: FlightInfo[]
-  tripSettings: { title: string; subtitle: string; countdown: string }
+  tripSettings: { title: string; subtitle: string }
   dayPlans: DayPlan[]
   bookingCards: {
+    used?: boolean
     title: string
     label: string
     body: string
@@ -137,12 +139,7 @@ type TripData = {
     amount: string
     payer: string
   }[]
-  planningTasks: {
-    title: string
-    assignee: string
-    done: boolean
-    mode?: string
-  }[]
+  planningTasks: PreparationTask[]
   members: {
     name: string
     role: string
@@ -330,25 +327,12 @@ const getFirebaseErrorMessage = (error: unknown, fallback: string) => {
   return fallback
 }
 
-const getFlightDate = (dateText: string) => {
-  const match = dateText.match(/(\d{1,2})\/(\d{1,2})/)
-  if (!match) return null
-
-  const date = new Date()
-  date.setHours(0, 0, 0, 0)
-  date.setMonth(Number(match[1]) - 1, Number(match[2]))
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  if (date < today) date.setFullYear(date.getFullYear() + 1)
-  return date
-}
-
 const getFlightCountdown = (flights: FlightInfo[]) => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const upcoming = flights
-    .map((flight) => getFlightDate(flight.date))
-    .filter((date): date is Date => date !== null && date >= today)
+    .map((flight) => new Date(`${toDateInputValue(flight.date)}T00:00:00`))
+    .filter((date) => Number.isFinite(date.getTime()) && date >= today)
     .sort((first, second) => first.getTime() - second.getTime())[0]
 
   if (!upcoming) return '--'
@@ -377,7 +361,6 @@ const localTripData: TripData = {
   tripSettings: {
     title: 'Disney + Universal',
     subtitle: '13 days · 2 parks · 6 cities',
-    countdown: '07',
   },
   dayPlans: [
     {
@@ -557,7 +540,7 @@ const localTripData: TripData = {
         },
         {
           id: 'disney-day-2',
-          name: '11/13 · EPCOT + Hollywood Studios',
+          name: '11/13 · Hollywood Studios',
           date: '11/13',
           routes: [
             { time: '上午', title: 'EPCOT', area: 'EPCOT', type: '景點', note: '使用 Disney 交通前往 EPCOT' },
@@ -626,7 +609,7 @@ const normalizeTripData = (value: Partial<TripData> | null | undefined): TripDat
       }))
     : localTripData.bookingCards,
   expenseEntries: Array.isArray(value?.expenseEntries) ? (value.expenseEntries as TripData['expenseEntries']) : localTripData.expenseEntries,
-  planningTasks: Array.isArray(value?.planningTasks) ? (value.planningTasks as TripData['planningTasks']).map((task) => ({ ...task, mode: task.mode || '待辦' })) : localTripData.planningTasks,
+  planningTasks: normalizePreparationTasks(Array.isArray(value?.planningTasks) ? value.planningTasks : localTripData.planningTasks, (value?.members ?? localTripData.members).map(member => member.name)),
   members: (Array.isArray(value?.members) ? (value.members as TripData['members']) : localTripData.members).reduce<TripData['members']>((assigned, member) => {
     const color = member.color && !assigned.some((previous) => previous.color === member.color)
       ? member.color
@@ -918,7 +901,8 @@ function App() {
   const countdown = getFlightCountdown(tripData.flightInfo)
   const expenseEntries = tripData.expenseEntries
   const planningTasks = tripData.planningTasks
-  const visiblePlanningTasks = planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationAssignee === '全體' || task.assignee === preparationAssignee))
+  const preparationPage = tripData.members.some(member => member.name === preparationAssignee) ? preparationAssignee : tripData.members[0]?.name ?? ''
+  const visiblePlanningTasks = planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationMode === '待辦' || getTaskAssignees(task).includes(preparationPage)))
     .sort((first, second) => Number(first.done) - Number(second.done))
   const members = tripData.members
   const parkSections = tripData.parkSections
@@ -1072,7 +1056,6 @@ function App() {
         tripSettings: {
           title: dataDraft.title.trim(),
           subtitle: dataDraft.subtitle || '',
-          countdown: dataDraft.countdown || '00',
         },
       }
     }
@@ -1098,6 +1081,7 @@ function App() {
       const item = {
         title: dataDraft.title.trim(),
         label: dataDraft.label || 'Info',
+        used: dataEditor.index === null ? false : tripData.bookingCards[dataEditor.index]?.used ?? false,
         body: dataDraft.body || '',
         meta: dataDraft.meta || '',
         accent: dataDraft.accent || 'bg-emerald-100 text-emerald-700',
@@ -1141,10 +1125,14 @@ function App() {
     }
 
     if (dataEditor.kind === 'task') {
-      const item = { title: dataDraft.title.trim(), assignee: dataDraft.assignee || '全體', done: dataDraft.done === 'true', mode: dataDraft.mode || preparationMode }
+      const mode = dataDraft.mode || preparationMode
+      const selected = parseDraftAssignees(dataDraft.assignees, dataDraft.assignee)
+      if (!selected.length) { setErrorMessage('請至少選擇一位負責人或全體。'); return }
+      const items = createPreparationTasks(dataDraft.title.trim(), mode, selected, members.map(member => member.name), dataDraft.done === 'true')
+      if (!items.length) { setErrorMessage('請先新增旅伴，再建立個人清單。'); return }
       const planningTasks = [...tripData.planningTasks]
-      if (dataEditor.index === null) planningTasks.push(item)
-      else planningTasks[dataEditor.index] = item
+      if (dataEditor.index === null) planningTasks.push(...items)
+      else planningTasks.splice(dataEditor.index, 1, ...items)
       nextTripData = { ...tripData, planningTasks }
     }
 
@@ -1163,7 +1151,6 @@ function App() {
         park: parkOptions[dataEditor.parkId].find((park) => park === dataDraft.park) ?? '',
         area: dataDraft.area || '',
         type: (dataDraft.type || '設施') as ParkDayRoute['type'],
-        ...(dataDraft.attachmentUrl ? { attachment: { url: dataDraft.attachmentUrl, name: dataDraft.attachmentName || 'certificate', type: dataDraft.attachmentType || 'application/pdf' } } : {}),
         note: dataDraft.note || '',
         ...(dataDraft.type === '設施' ? { rating: Math.max(0, Math.min(5, Math.round(Number(dataDraft.rating) || 0))) } : {}),
       }
@@ -1260,12 +1247,27 @@ function App() {
     }
   }
 
+  const toggleVoucherUsed = async (index: number) => {
+    if (isSaving) return
+    const nextTripData = { ...tripData, bookingCards: tripData.bookingCards.map((card, i) => i === index ? { ...card, used: !card.used } : card) }
+    setIsSaving(true)
+    try {
+      await saveTripDataToFirebase(nextTripData)
+      setTripData(nextTripData)
+      setErrorMessage(null)
+    } catch (error) {
+      setErrorMessage(getFirebaseErrorMessage(error, '憑證使用狀態儲存失敗'))
+    } finally { setIsSaving(false) }
+  }
+
   const togglePlanningTask = async (index: number) => {
+    if (isSaving) return
     const planningTasks = tripData.planningTasks.map((task, taskIndex) =>
       taskIndex === index ? { ...task, done: !task.done } : task,
     )
     const nextTripData = { ...tripData, planningTasks }
 
+    setIsSaving(true)
     try {
       await saveTripDataToFirebase(nextTripData)
       setTripData(nextTripData)
@@ -1273,7 +1275,7 @@ function App() {
     } catch (error) {
       console.error('Failed to update task:', error)
       setErrorMessage(getFirebaseErrorMessage(error, '待辦事項更新失敗'))
-    }
+    } finally { setIsSaving(false) }
   }
 
   const reorderScheduleItems = async (targetIndex: number, source: number | null = draggingScheduleIndex) => {
@@ -1426,7 +1428,7 @@ function App() {
         if (selectedParkDay) openDataEditor({ kind: 'route', index: null, parkId: selectedPark.id, dayId: selectedParkDay.id }, { type: '設施' })
         break
       case 'planning':
-        openDataEditor({ kind: 'task', index: null }, { title: '', assignee: preparationAssignee, done: 'false', mode: preparationMode })
+        openDataEditor({ kind: 'task', index: null }, { title: '', assignees: JSON.stringify([preparationMode === '待辦' ? '全體' : preparationPage || '全體']), done: 'false', mode: preparationMode })
         break
       case 'members':
         openDataEditor({ kind: 'member', index: null }, { title: '', role: '旅伴', color: randomMemberColor(tripData.members) })
@@ -1726,7 +1728,7 @@ function App() {
                           <div className="h-px flex-1 bg-muted/40" />
                         </div>
                       )}
-                    <div data-drag-group="booking" data-drag-index={visibleIndex} draggable onDragStart={() => setDraggingBookingIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverBookingIndex(visibleIndex) }} onDrop={() => void reorderBookingCards(visibleIndex)} onDragEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} className={`category-card draggable-card cursor-grab active:cursor-grabbing ${bookingMode === 'hotel' ? 'schedule-item mb-4 last:mb-0 flex gap-3 rounded-[22px] p-3' : 'booking-card soft-card mb-3 p-4'} ${isExpired ? 'opacity-45 grayscale' : ''} ${draggingBookingIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverBookingIndex === visibleIndex ? 'drag-over-card' : ''}`}>
+                    <div data-drag-group="booking" data-drag-index={visibleIndex} draggable onDragStart={() => setDraggingBookingIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverBookingIndex(visibleIndex) }} onDrop={() => void reorderBookingCards(visibleIndex)} onDragEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} className={`category-card draggable-card cursor-grab active:cursor-grabbing ${bookingMode === 'hotel' ? 'schedule-item mb-4 last:mb-0 flex gap-3 rounded-[22px] p-3' : 'booking-card soft-card mb-3 p-4'} ${isExpired || (card.label === 'Voucher' && card.used) ? 'opacity-45 grayscale' : ''} ${draggingBookingIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverBookingIndex === visibleIndex ? 'drag-over-card' : ''}`}>
                         <DragHandle group="booking" index={visibleIndex} onStart={setDraggingBookingIndex} onOver={setDragOverBookingIndex} onEnd={() => { setDraggingBookingIndex(null); setDragOverBookingIndex(null) }} onMove={reorderBookingCards} />
                       <span className={`label-chip category-edge-label ${bookingMode === 'hotel' ? 'bg-violet-100 text-violet-700' : card.accent}`}>{card.label}</span>
                       {bookingMode === 'hotel' && (
@@ -1784,6 +1786,7 @@ function App() {
                         </div>
                       )}
                       <div className={bookingMode === 'hotel' ? 'mt-2 break-words text-xs leading-5 text-ink/70' : 'mt-1 text-sm text-muted'}>{card.meta}</div>
+                      {card.label === 'Voucher' && <label className="mt-3 flex items-center gap-2 text-xs font-bold text-muted"><input type="checkbox" checked={card.used ?? false} disabled={isSaving} onChange={() => void toggleVoucherUsed(index)} />{card.used ? '已使用' : '標記為已使用'}</label>}
                       {card.attachment && (
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button type="button" onClick={() => setPreviewAttachment(card.attachment!)} className="rounded-full bg-sky-100 px-3 py-1.5 text-xs font-black text-sky-700">預覽憑證</button>
@@ -1953,17 +1956,12 @@ function App() {
               </div>
             </section>
 
-            <section className="soft-card section-info p-3">
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {['全體', ...members.map((member) => member.name)].map((assignee) => (
-                  <button key={assignee} type="button" onClick={() => setPreparationAssignee(assignee)} className={`shrink-0 rounded-full px-4 py-2 text-xs font-black ${preparationAssignee === assignee ? 'bg-[#725B4A] text-white' : 'bg-white text-[#9B907E]'}`}>
-                    {assignee}
-                  </button>
-                ))}
+            {preparationMode !== '待辦' && <section className="soft-card section-info p-3">
+              <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label={`${preparationMode}個人頁面`}>
+                {members.map(member => <button key={member.name} type="button" role="tab" aria-selected={preparationPage === member.name} onClick={() => setPreparationAssignee(member.name)} className={`shrink-0 rounded-full px-4 py-2 text-xs font-black ${preparationPage === member.name ? 'bg-[#725B4A] text-white' : 'bg-white text-[#9B907E]'}`}>{member.name}</button>)}
               </div>
-            </section>
-
-
+              <p className="mt-2 text-xs text-muted">{preparationPage ? `${preparationPage}的${preparationMode}清單，完成狀態獨立記錄。` : '請先新增旅伴，再建立個人清單。'}</p>
+            </section>}
 
             {visiblePlanningTasks.map((task, visibleIndex) => {
               const index = planningTasks.indexOf(task)
@@ -1978,13 +1976,13 @@ function App() {
                   )}
                 <section data-drag-group="task" data-drag-index={visibleIndex} draggable onDragStart={() => setDraggingTaskIndex(visibleIndex)} onDragOver={(event) => { event.preventDefault(); setDragOverTaskIndex(visibleIndex) }} onDrop={() => void reorderPlanningTasks(visibleIndex)} onDragEnd={() => { setDraggingTaskIndex(null); setDragOverTaskIndex(null) }} className={`category-card todo-card draggable-card cursor-grab p-4 ${task.done ? 'completed-task' : ''} ${draggingTaskIndex === visibleIndex ? 'dragging-card' : ''} ${dragOverTaskIndex === visibleIndex ? 'drag-over-card' : ''}`}>
                         <DragHandle group="task" index={visibleIndex} onStart={setDraggingTaskIndex} onOver={setDragOverTaskIndex} onEnd={() => { setDraggingTaskIndex(null); setDragOverTaskIndex(null) }} onMove={reorderPlanningTasks} />
-                  <span className={`member-color label-chip category-edge-label ${members.find((member) => member.name === task.assignee)?.color || 'bg-slate-200 text-slate-700'}`}>{task.assignee}</span>
+                  <span className={`member-color label-chip category-edge-label ${members.find((member) => member.name === task.assignee)?.color || 'bg-slate-200 text-slate-700'}`}>{getTaskAssignees(task).join('、')}</span>
                   <div className="flex items-center gap-3">
                     <button type="button" onClick={() => void togglePlanningTask(index)} aria-label={task.done ? '標記為未完成' : '標記為完成'} aria-pressed={task.done} className="flex h-11 w-8 shrink-0 items-center justify-center">
                       <span className={`flex h-7 w-7 items-center justify-center rounded-full border text-sm font-bold ${task.done ? 'border-olive bg-olive text-white' : 'border-[#A8D093] text-olive'}`} aria-hidden="true">{task.done ? '✓' : ''}</span>
                     </button>
                     <div className={`flex-1 text-lg font-black ${task.done ? 'text-ink/40 line-through' : 'text-ink'}`}>{task.title}</div>
-                    <button type="button" onClick={() => openDataEditor({ kind: 'task', index }, { title: task.title, assignee: task.assignee, done: String(task.done), mode: task.mode || preparationMode })} className="text-lg text-[#B8AD99]" aria-label="編輯待辦">
+                    <button type="button" onClick={() => openDataEditor({ kind: 'task', index }, { title: task.title, assignees: JSON.stringify(getTaskAssignees(task)), done: String(task.done), mode: task.mode || preparationMode })} className="text-lg text-[#B8AD99]" aria-label={`編輯${preparationMode}`}>
                       <FontAwesomeIcon icon={faPen} />
                     </button>
                   </div>
@@ -2318,7 +2316,6 @@ function App() {
                 {dataEditor.kind === 'tripSettings' && (
                   <>
                     <label className="block text-xs font-bold text-muted">摘要文字<input value={dataDraft.subtitle ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, subtitle: event.target.value })} className="form-field" /></label>
-                    <label className="block text-xs font-bold text-muted">Countdown 天數<input value={dataDraft.countdown ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, countdown: event.target.value })} className="form-field" /></label>
                   </>
                 )}
 
@@ -2330,15 +2327,19 @@ function App() {
                   </div>
                 )}
 
-                {dataEditor.kind === 'task' && (
-                  <label className="block text-xs font-bold text-muted">
-                    負責人
-                    <select value={dataDraft.assignee ?? '全體'} onChange={(event) => setDataDraft({ ...dataDraft, assignee: event.target.value })} className="form-field">
-                      <option value="全體">全體</option>
-                      {members.map((member) => <option key={member.name} value={member.name}>{member.name}</option>)}
-                    </select>
-                  </label>
-                )}
+                {dataEditor.kind === 'task' && <div className="space-y-3">
+                  <label className="block text-xs font-bold text-muted">分類<select value={dataDraft.mode || preparationMode} onChange={event => setDataDraft({ ...dataDraft, mode: event.target.value })} className="form-field">{preparationModes.map(mode => <option key={mode.label}>{mode.label}</option>)}</select></label>
+                  <fieldset disabled={isSaving} className="space-y-2"><legend className="mb-2 text-xs font-bold text-muted">負責人（可多選）</legend>
+                    {['全體', ...new Set([...members.map(member => member.name), ...parseDraftAssignees(dataDraft.assignees, dataDraft.assignee).filter(name => name !== '全體')])].map(name => {
+                      const selected = parseDraftAssignees(dataDraft.assignees, dataDraft.assignee)
+                      return <label key={name} className="mr-3 inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={selected.includes(name)} onChange={event => {
+                        const next = name === '全體' ? (event.target.checked ? ['全體'] : []) : event.target.checked ? [...selected.filter(value => value !== '全體'), name] : selected.filter(value => value !== name)
+                        setDataDraft({ ...dataDraft, assignees: JSON.stringify(next) })
+                      }} />{name}</label>
+                    })}
+                  </fieldset>
+                  <p className="text-xs text-muted">{(dataDraft.mode || preparationMode) === '待辦' ? '待辦為共同事項，多位負責人共用同一筆完成狀態。' : '替每位選取的成員各建立一筆；選全體會替所有目前旅伴建立，完成狀態各自獨立。'}</p>
+                </div>}
 
                 {dataEditor.kind === 'member' && (
                   <label className="block text-xs font-bold text-muted">角色<input value={dataDraft.role ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, role: event.target.value })} className="form-field" /></label>
