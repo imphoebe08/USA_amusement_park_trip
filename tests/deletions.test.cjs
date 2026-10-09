@@ -8,6 +8,7 @@ vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/preparation.ts', 'utf
 const source = fs.readFileSync('src/App.tsx', 'utf8')
 const extract = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)))
 const code = ts.transpileModule([
+  extract('const getConfirmationEmailUrl', 'const getFirebaseErrorMessage'),
   extract('const saveTripDataToFirebase', 'const emptyScheduleItem'),
   extract('  const deleteScheduleItem', '  const openDataEditor'),
   extract('  const deleteDataEditor', '  const toggleVoucherUsed'),
@@ -25,6 +26,7 @@ function setup(kind, persist = async () => {}) {
   }
   const writes = [], updates = [], errors = [], closed = []
   const context = vm.createContext({
+    URL,
     ...preparation.exports, members: [{ name: 'A' }, { name: 'B' }], preparationMode: '待辦', pendingCertificate: null, setPendingCertificate: value => { context.pendingCertificate = value }, setCertificateStatus: () => {}, setDataDraft: fn => { context.dataDraft = fn(context.dataDraft) }, tripData: original, isSaving: false, hasLoadedTripData: true,
     window: { confirm: () => true }, draftItem: { title: '行程' }, dataDraft: { title: '資料' },
     dataEditor: { kind, index: 1, parkId: 'universal', dayId: 'day1' }, editingItem: { date: '11/4', index: 1 },
@@ -229,3 +231,24 @@ test('completing one personal preparation record leaves the other unfinished', a
   assert.equal(ui.writes[0].data.planningTasks[0].done, true)
   assert.equal(ui.writes[0].data.planningTasks[1].done, false)
 })
+
+for (const kind of ['flight', 'booking']) {
+  test(`${kind}: confirmation email URL is saved, retained on edit, and can be cleared`, async () => {
+    const ui = setup(kind)
+    ui.context.dataDraft = { title: '訂單', confirmationEmailUrl: ' https://mail.google.com/mail/u/0/#inbox/example ' }
+    await ui.save()
+    assert.equal(ui.writes[0].data[fields[kind]][1].confirmationEmailUrl, 'https://mail.google.com/mail/u/0/#inbox/example')
+    ui.context.dataDraft.confirmationEmailUrl = ''
+    await ui.save()
+    assert.equal(ui.writes[1].data[fields[kind]][1].confirmationEmailUrl, '')
+  })
+  test(`${kind}: unsafe or incomplete links do not save`, async () => {
+    for (const url of ['javascript:alert(1)', 'not-a-link', 'http://example.com', 'https://user:password@example.com']) {
+      const ui = setup(kind)
+      ui.context.dataDraft = { title: '訂單', confirmationEmailUrl: url }
+      await ui.save()
+      assert.equal(ui.writes.length, 0)
+      assert.equal(ui.errors.length, 1)
+    }
+  })
+}
