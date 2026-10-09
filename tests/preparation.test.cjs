@@ -46,3 +46,11 @@ test('draft supports old assignee field and distinguishes empty selection', () =
   assert.deepEqual(plain(parseDraftAssignees(undefined, 'A')), ['A'])
   assert.deepEqual(plain(parseDraftAssignees('[]')), [])
 })
+
+test('legacy owners remain reachable after member rename or removal', () => {
+  const pages = exportsObject.getPreparationPages([
+    { title: '想去', mode: '想去', assignee: 'OldName', done: false },
+    { title: '採購', mode: '採購', assignee: 'Other', done: false },
+  ], '想去', ['NewName'])
+  assert.deepEqual(plain(pages), ['NewName', 'OldName'])
+})

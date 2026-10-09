@@ -30,3 +30,7 @@ export const parseDraftAssignees = (value: string | undefined, legacy = '全體'
     return Array.isArray(selected) ? selected.filter((name): name is string => typeof name === 'string') : []
   } catch { return [legacy || '全體'] }
 }
+
+// Keep legacy owners reachable even after a member is renamed or removed.
+export const getPreparationPages = (tasks: PreparationTask[], mode: string, members: string[]): string[] =>
+  [...new Set([...members, ...tasks.filter(task => (task.mode || '待辦') === mode).flatMap(getTaskAssignees)])]

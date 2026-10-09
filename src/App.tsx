@@ -3,7 +3,8 @@ import { createPortal, flushSync } from 'react-dom'
 import { DragHandle } from './DragHandle'
 import { PullToRefresh } from './PullToRefresh'
 import { getAirportPlace } from './airports'
-import { createPreparationTasks, getTaskAssignees, normalizePreparationTasks, parseDraftAssignees, type PreparationTask } from './preparation'
+import { formatFlightDuration } from './flightDuration'
+import { createPreparationTasks, getPreparationPages, getTaskAssignees, normalizePreparationTasks, parseDraftAssignees, type PreparationTask } from './preparation'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import {
   faCalendarDays,
@@ -44,6 +45,7 @@ const parkLabelColors: Record<string, string> = {
 }
 type BookingMode = 'flight' | 'hotel' | 'car' | 'voucher'
 type FlightInfo = {
+  arrivalDate?: string
   attachment?: { url: string; name: string; type: string }
   note?: string
   airline: string
@@ -901,7 +903,8 @@ function App() {
   const countdown = getFlightCountdown(tripData.flightInfo)
   const expenseEntries = tripData.expenseEntries
   const planningTasks = tripData.planningTasks
-  const preparationPage = tripData.members.some(member => member.name === preparationAssignee) ? preparationAssignee : tripData.members[0]?.name ?? ''
+  const preparationPages = getPreparationPages(planningTasks, preparationMode, tripData.members.map(member => member.name))
+  const preparationPage = preparationPages.includes(preparationAssignee) ? preparationAssignee : preparationPages.find(name => planningTasks.some(task => (task.mode || '待辦') === preparationMode && getTaskAssignees(task).includes(name))) ?? preparationPages[0] ?? ''
   const visiblePlanningTasks = planningTasks.filter((task) => (task.mode || '待辦') === preparationMode && (preparationMode === '待辦' || getTaskAssignees(task).includes(preparationPage)))
     .sort((first, second) => Number(first.done) - Number(second.done))
   const members = tripData.members
@@ -1041,6 +1044,7 @@ function App() {
         airline: dataDraft.airline || '', flightNumber: dataDraft.flightNumber || '',
         departureAirport: dataDraft.departureAirport || '', departureTime: dataDraft.departureTime || '',
         arrivalAirport: dataDraft.arrivalAirport || '', arrivalTime: dataDraft.arrivalTime || '',
+        arrivalDate: dataDraft.arrivalDate || '',
         date: dataDraft.date || '', baggage: dataDraft.baggage || '', aircraft: dataDraft.aircraft || '',
         price: dataDraft.price || '', confirmationCode: dataDraft.confirmationCode || '', purchaser: dataDraft.purchaser || '',
       }
@@ -1620,7 +1624,8 @@ function App() {
                     >
                       <div className="flex min-w-0 flex-1 items-center gap-3">
                         <div className="w-12 shrink-0 text-center text-xs font-black leading-tight text-muted">{formatDateLabel(toDateInputValue(flight.date))}</div>
-                        <div className="flex min-w-0 flex-1 items-end justify-center gap-2">
+                        <div className="min-w-0 flex-1">
+                        <div className="flex items-end justify-center gap-2">
                           <div className="min-w-0 text-center">
                             <div className="text-[10px] font-bold text-muted">{flight.departureTime || '--'}</div>
                             <div className={`min-w-0 text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-ink'}`}>{flight.departureAirport || '--'}</div>
@@ -1630,6 +1635,8 @@ function App() {
                             <div className="text-[10px] font-bold text-muted">{flight.arrivalTime || '--'}</div>
                             <div className={`min-w-0 text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-ink'}`}>{flight.arrivalAirport || '--'}</div>
                           </div>
+                        </div>
+                          <div className="mt-2 text-center text-[10px] font-bold text-muted">{formatFlightDuration(flight)}</div>
                         </div>
                         <div className={`w-14 shrink-0 text-right text-sm font-black ${isPastFlight(flight) ? 'text-[#aaa89f]' : 'text-olive'}`}>{flight.flightNumber || '--'}</div>
                       </div>
@@ -1650,7 +1657,7 @@ function App() {
                       <span className="mt-2 inline-block rounded-full bg-[#80B95D] px-3 py-1 text-[10px] font-black text-white">{getAirportPlace(flightInfo.departureAirport)}</span>
                     </div>
                     <div className="px-2 text-center text-xs font-bold text-[#B0A695]">
-                      <div>02h25m</div>
+                      <div>{formatFlightDuration(flightInfo)}</div>
                       <FontAwesomeIcon icon={faPlane} className="my-2 text-xl text-[#3976D8]" />
                       <div>{flightInfo.date}</div>
                     </div>
@@ -1958,7 +1965,7 @@ function App() {
 
             {preparationMode !== '待辦' && <section className="soft-card section-info p-3">
               <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label={`${preparationMode}個人頁面`}>
-                {members.map(member => <button key={member.name} type="button" role="tab" aria-selected={preparationPage === member.name} onClick={() => setPreparationAssignee(member.name)} className={`shrink-0 rounded-full px-4 py-2 text-xs font-black ${preparationPage === member.name ? 'bg-[#725B4A] text-white' : 'bg-white text-[#9B907E]'}`}>{member.name}</button>)}
+                {preparationPages.map(name => <button key={name} type="button" role="tab" aria-selected={preparationPage === name} onClick={() => setPreparationAssignee(name)} className={`shrink-0 rounded-full px-4 py-2 text-xs font-black ${preparationPage === name ? 'bg-[#725B4A] text-white' : 'bg-white text-[#9B907E]'}`}>{name}{!members.some(member => member.name === name) && '（舊資料）'}</button>)}
               </div>
               <p className="mt-2 text-xs text-muted">{preparationPage ? `${preparationPage}的${preparationMode}清單，完成狀態獨立記錄。` : '請先新增旅伴，再建立個人清單。'}</p>
             </section>}
@@ -2283,7 +2290,8 @@ function App() {
                       ['departureTime', '出發時間'],
                       ['arrivalAirport', '抵達機場'],
                       ['arrivalTime', '抵達時間'],
-                      ['date', '日期'],
+                      ['date', '出發日期（當地）'],
+                      ['arrivalDate', '抵達日期（當地，可選）'],
                       ['baggage', '行李'],
                       ['aircraft', '機型'],
                       ['price', '價格'],
@@ -2291,7 +2299,7 @@ function App() {
                     ].map(([key, label]) => (
                       <label key={key} className="text-xs font-bold text-muted">
                         {label}
-                        <input type={key === 'date' ? 'date' : 'text'} value={key === 'date' ? toDateInputValue(dataDraft[key] ?? '') : dataDraft[key] ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, [key]: event.target.value })} className="form-field" />
+                        <input type={key === 'date' || key === 'arrivalDate' ? 'date' : 'text'} value={key === 'date' || key === 'arrivalDate' ? toDateInputValue(dataDraft[key] ?? '') : dataDraft[key] ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, [key]: event.target.value })} className="form-field" />
                       </label>
                     ))}
                     <label className="col-span-2 text-xs font-bold text-muted">訂購人<select value={dataDraft.purchaser ?? ''} onChange={(event) => setDataDraft({ ...dataDraft, purchaser: event.target.value })} className="form-field"><option value="">請選擇成員</option>{members.map((member) => <option key={member.name} value={member.name}>{member.name}</option>)}</select></label>
