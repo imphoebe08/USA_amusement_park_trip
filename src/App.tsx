@@ -45,7 +45,6 @@ const parkLabelColors: Record<string, string> = {
 }
 type BookingMode = 'flight' | 'hotel' | 'car' | 'voucher'
 type FlightInfo = {
-  confirmationEmailUrl?: string
   arrivalDate?: string
   attachment?: { url: string; name: string; type: string }
   note?: string
@@ -116,7 +115,6 @@ type TripData = {
   tripSettings: { title: string; subtitle: string }
   dayPlans: DayPlan[]
   bookingCards: {
-    confirmationEmailUrl?: string
     used?: boolean
     title: string
     label: string
@@ -314,14 +312,6 @@ const uploadCertificate = async (file: File) => {
     name: `${file.name.replace(/\.[^.]+$/, '')}.${extension}`,
     type: contentType,
   }
-}
-
-const getConfirmationEmailUrl = (value: string | undefined): string => {
-  if (!value?.trim()) return ''
-  try {
-    const url = new URL(value.trim())
-    return url.protocol === 'https:' && !url.username && !url.password ? url.href : ''
-  } catch { return '' }
 }
 
 const getFirebaseErrorMessage = (error: unknown, fallback: string) => {
@@ -1044,15 +1034,10 @@ function App() {
       return
     }
 
-    if ((dataEditor.kind === 'flight' || dataEditor.kind === 'booking') && dataDraft.confirmationEmailUrl?.trim() && !getConfirmationEmailUrl(dataDraft.confirmationEmailUrl)) {
-      setErrorMessage('請貼上完整的確認信 HTTPS 連結（例如 Gmail 或 Outlook 的郵件網址）。')
-      return
-    }
     let nextTripData = tripData
 
     if (dataEditor.kind === 'flight') {
       const item: FlightInfo = {
-        confirmationEmailUrl: getConfirmationEmailUrl(dataDraft.confirmationEmailUrl),
         ...(dataDraft.attachmentUrl ? { attachment: { url: dataDraft.attachmentUrl, name: dataDraft.attachmentName || 'certificate', type: dataDraft.attachmentType || 'application/pdf' } } : {}),
         note: dataDraft.note || '',
         airline: dataDraft.airline || '', flightNumber: dataDraft.flightNumber || '',
@@ -1099,7 +1084,6 @@ function App() {
       const item = {
         title: dataDraft.title.trim(),
         label: dataDraft.label || 'Info',
-        confirmationEmailUrl: getConfirmationEmailUrl(dataDraft.confirmationEmailUrl),
         used: dataEditor.index === null ? false : tripData.bookingCards[dataEditor.index]?.used ?? false,
         body: dataDraft.body || '',
         meta: dataDraft.meta || '',
@@ -1714,7 +1698,6 @@ function App() {
                 >
                   編輯航班資訊
                 </button>
-                {getConfirmationEmailUrl(flight.confirmationEmailUrl) && <div className="mx-4 mb-4"><a href={getConfirmationEmailUrl(flight.confirmationEmailUrl)} target="_blank" rel="noopener noreferrer" className="inline-flex rounded-full bg-sky-100 px-4 py-2 text-xs font-black text-sky-700">開啟確認信</a></div>}
                 {flight.attachment && <div className="mt-3 flex gap-2"><button type="button" onClick={() => setPreviewAttachment(flight.attachment!)} className="rounded-full bg-sky-100 px-3 py-1.5 text-xs font-black text-sky-700">預覽憑證</button><a href={flight.attachment.url} download={flight.attachment.name} target="_blank" rel="noreferrer" className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-700">下載憑證</a></div>}
               </section>
                     )}
@@ -1776,7 +1759,7 @@ function App() {
                         {bookingMode !== 'hotel' && <span className="absolute right-0 top-7 text-[10px] font-black text-muted" title="拖曳排序">☷</span>}
                         <button
                           type="button"
-                          onClick={() => openDataEditor({ kind: 'booking', index }, { title: card.title, label: card.label, confirmationEmailUrl: card.confirmationEmailUrl || '', body: card.body, meta: card.meta, accent: card.accent, actualPickupTime: card.actualPickupTime ?? '', pickupLocation: card.pickupLocation ?? '', pickupMapUrl: card.pickupMapUrl ?? '', returnLocation: card.returnLocation ?? '', returnMapUrl: card.returnMapUrl ?? '', vehicleModel: card.vehicleModel ?? '', checkInTime: card.checkInTime ?? '', checkOutTime: card.checkOutTime ?? '', startDate: card.startDate ?? '', endDate: card.endDate ?? '', orderNumber: card.orderNumber ?? '', purchaser: card.purchaser ?? '', attachmentUrl: card.attachment?.url ?? '', attachmentName: card.attachment?.name ?? '', attachmentType: card.attachment?.type ?? '' })}
+                          onClick={() => openDataEditor({ kind: 'booking', index }, { title: card.title, label: card.label, body: card.body, meta: card.meta, accent: card.accent, actualPickupTime: card.actualPickupTime ?? '', pickupLocation: card.pickupLocation ?? '', pickupMapUrl: card.pickupMapUrl ?? '', returnLocation: card.returnLocation ?? '', returnMapUrl: card.returnMapUrl ?? '', vehicleModel: card.vehicleModel ?? '', checkInTime: card.checkInTime ?? '', checkOutTime: card.checkOutTime ?? '', startDate: card.startDate ?? '', endDate: card.endDate ?? '', orderNumber: card.orderNumber ?? '', purchaser: card.purchaser ?? '', attachmentUrl: card.attachment?.url ?? '', attachmentName: card.attachment?.name ?? '', attachmentType: card.attachment?.type ?? '' })}
                           className={`absolute right-0 text-[10px] font-black text-olive ${bookingMode === 'hotel' ? 'top-0' : 'top-0 uppercase tracking-[0.14em]'}`}
                         >
                           編輯
@@ -1809,7 +1792,6 @@ function App() {
                         </div>
                       )}
                       <div className={bookingMode === 'hotel' ? 'mt-2 break-words text-xs leading-5 text-ink/70' : 'mt-1 text-sm text-muted'}>{card.meta}</div>
-                      {getConfirmationEmailUrl(card.confirmationEmailUrl) && <div className="mt-3"><a href={getConfirmationEmailUrl(card.confirmationEmailUrl)} target="_blank" rel="noopener noreferrer" className="inline-flex rounded-full bg-sky-100 px-4 py-2 text-xs font-black text-sky-700">開啟確認信</a></div>}
                       {card.label === 'Voucher' && <label className="mt-3 flex items-center gap-2 text-xs font-bold text-muted"><input type="checkbox" checked={card.used ?? false} disabled={isSaving} onChange={() => void toggleVoucherUsed(index)} />{card.used ? '已使用' : '標記為已使用'}</label>}
                       {card.attachment && (
                         <div className="mt-3 flex flex-wrap gap-2">
@@ -2329,8 +2311,6 @@ function App() {
                 )}
 
                 {(dataEditor.kind === 'booking' || dataEditor.kind === 'flight') && <div className="space-y-3">
-                    <label className="block text-xs font-bold text-muted">確認信連結（選填）<input type="url" disabled={isSaving} value={dataDraft.confirmationEmailUrl || ''} onChange={event => setDataDraft({ ...dataDraft, confirmationEmailUrl: event.target.value })} placeholder="https://mail.google.com/… 或 Outlook 郵件連結" className="form-field" /></label>
-                    <p className="text-xs text-muted">在 Gmail／Outlook 網頁版開啟那封確認信，複製網址並貼上。按鈕會開啟郵件連結，需登入能查看該信的帳號；其他旅伴不會因此取得郵件存取權。</p>
                     <label className="block text-xs font-bold text-muted">
                       憑證檔案（PDF / JPG / PNG / WebP；小於 10 MB）
                       <input type="file" disabled={isSaving} accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(event) => { void handleCertificateChange(event.target.files?.[0]); event.target.value = '' }} className="form-field file:mr-2 file:rounded-full file:border-0 file:bg-olive file:px-3 file:py-1 file:text-xs file:font-black file:text-white" />
